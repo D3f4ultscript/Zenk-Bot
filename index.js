@@ -1,5 +1,7 @@
 const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 
 const client = new Client({
@@ -14,15 +16,19 @@ app.use(express.json());
 
 let executionCount = 0;
 let lastUpdate = 0;
-let logs = [];
 const UPDATE_COOLDOWN = 5 * 60 * 1000;
+const logFile = path.join(__dirname, 'logs.txt');
 
 function addLog(message) {
     const timestamp = new Date().toISOString();
-    const logEntry = `[${timestamp}] ${message}`;
-    logs.push(logEntry);
-    console.log(logEntry);
-    if (logs.length > 100) logs.shift();
+    const logEntry = `[${timestamp}] ${message}\n`;
+    console.log(logEntry.trim());
+    
+    try {
+        fs.appendFileSync(logFile, logEntry);
+    } catch (err) {
+        console.error('Failed to write log:', err.message);
+    }
 }
 
 client.once('ready', async () => {
@@ -36,7 +42,7 @@ client.once('ready', async () => {
             return;
         }
         
-        addLog(`Channel found: ${channel.name} (Type: ${channel.type})`);
+        addLog(`Channel found: ${channel.name}`);
         
         if (!channel.isVoiceBased()) {
             addLog('ERROR: Not a voice channel!');
@@ -44,51 +50,45 @@ client.once('ready', async () => {
         }
         
         const permissions = channel.permissionsFor(client.user);
-        addLog(`Bot has ManageChannels: ${permissions.has(PermissionFlagsBits.ManageChannels)}`);
-        addLog(`Bot has ViewChannel: ${permissions.has(PermissionFlagsBits.ViewChannel)}`);
+        addLog(`ManageChannels: ${permissions.has(PermissionFlagsBits.ManageChannels)}`);
         
         const currentName = channel.name;
         const match = currentName.match(/Executions:\s*(\d+)/);
         if (match) {
             executionCount = parseInt(match[1]);
         }
-        addLog(`Starting execution count: ${executionCount}`);
+        addLog(`Starting count: ${executionCount}`);
     } catch (error) {
         addLog(`ERROR: ${error.message}`);
     }
 });
 
 app.post('/execution', async (req, res) => {
-    addLog('POST /execution received');
+    addLog('Execution received');
     
     try {
         executionCount++;
         const currentTime = Date.now();
         
-        addLog(`Execution #${executionCount} logged`);
+        addLog(`Count: ${executionCount}`);
         
         if (currentTime - lastUpdate < UPDATE_COOLDOWN) {
             const waitTime = Math.ceil((UPDATE_COOLDOWN - (currentTime - lastUpdate)) / 1000);
-            addLog(`Cooldown: ${waitTime}s remaining`);
-            res.json({ 
-                success: true, 
-                count: executionCount,
-                cooldown: waitTime
-            });
+            addLog(`Cooldown: ${waitTime}s`);
+            res.json({ success: true, count: executionCount });
             return;
         }
         
-        addLog('Attempting to update channel...');
         const channel = await client.channels.fetch(config.channelId);
         
         if (channel && channel.isVoiceBased()) {
             await channel.setName(`Executions: ${executionCount}`);
             lastUpdate = currentTime;
-            addLog(`SUCCESS: Channel renamed to "Executions: ${executionCount}"`);
+            addLog(`Channel updated: ${executionCount}`);
             res.json({ success: true, count: executionCount, updated: true });
         } else {
             addLog('ERROR: Channel not found');
-            res.status(404).json({ success: false, error: 'Channel not found' });
+            res.status(404).json({ success: false });
         }
     } catch (error) {
         addLog(`ERROR: ${error.message}`);
@@ -100,24 +100,25 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'online', 
         executions: executionCount,
-        lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never',
         botReady: client.isReady()
     });
 });
 
 app.get('/logs', (req, res) => {
-    res.type('text/plain').send(logs.join('\n') || 'No logs yet');
+    try {
+        if (fs.existsSync(logFile)) {
+            const logs = fs.readFileSync(logFile, 'utf8');
+            res.type('text/plain').send(logs);
+        } else {
+            res.send('No logs file found');
+        }
+    } catch (error) {
+        res.status(500).send('Error reading logs');
+    }
 });
-
-setInterval(() => {
-    fetch(`http://localhost:${config.port}/`)
-        .catch(() => {});
-}, 600000);
 
 app.listen(config.port, () => {
     addLog(`Server running on port ${config.port}`);
 });
 
-client.login(config.token).catch(err => {
-    addLog(`Login error: ${err.message}`);
-});
+client.login(config.token);
