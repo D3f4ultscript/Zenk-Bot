@@ -1,7 +1,5 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const config = require('./config');
 
 const client = new Client({
@@ -16,79 +14,84 @@ app.use(express.json());
 
 let executionCount = 0;
 let lastUpdate = 0;
-const UPDATE_COOLDOWN = 5 * 60 * 1000; // 5 Minuten Cooldown
-const logFile = path.join(__dirname, 'executionlogs.txt');
+let logs = [];
+const UPDATE_COOLDOWN = 5 * 60 * 1000;
 
-function writeLog(message) {
+function addLog(message) {
     const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] ${message}\n`;
-    fs.appendFileSync(logFile, logMessage);
-    console.log(logMessage.trim());
+    const logEntry = `[${timestamp}] ${message}`;
+    logs.push(logEntry);
+    console.log(logEntry);
+    if (logs.length > 100) logs.shift();
 }
 
 client.once('ready', async () => {
-    writeLog(`Bot online as ${client.user.tag}`);
+    addLog(`Bot online as ${client.user.tag}`);
     
     try {
         const channel = await client.channels.fetch(config.channelId);
         
         if (!channel) {
-            writeLog('ERROR: Channel not found! Check CHANNEL_ID');
+            addLog('ERROR: Channel not found!');
             return;
         }
         
+        addLog(`Channel found: ${channel.name} (Type: ${channel.type})`);
+        
         if (!channel.isVoiceBased()) {
-            writeLog('ERROR: Channel is not a voice channel!');
+            addLog('ERROR: Not a voice channel!');
             return;
         }
         
         const permissions = channel.permissionsFor(client.user);
-        if (!permissions.has('ManageChannels')) {
-            writeLog('ERROR: Bot missing MANAGE_CHANNELS permission!');
-            return;
-        }
+        addLog(`Bot has ManageChannels: ${permissions.has(PermissionFlagsBits.ManageChannels)}`);
+        addLog(`Bot has ViewChannel: ${permissions.has(PermissionFlagsBits.ViewChannel)}`);
         
         const currentName = channel.name;
         const match = currentName.match(/Executions:\s*(\d+)/);
         if (match) {
             executionCount = parseInt(match[1]);
         }
-        writeLog(`Current executions: ${executionCount}`);
+        addLog(`Starting execution count: ${executionCount}`);
     } catch (error) {
-        writeLog(`ERROR fetching channel: ${error.message}`);
+        addLog(`ERROR: ${error.message}`);
     }
 });
 
 app.post('/execution', async (req, res) => {
+    addLog('POST /execution received');
+    
     try {
         executionCount++;
         const currentTime = Date.now();
         
-        writeLog(`Execution #${executionCount} received`);
+        addLog(`Execution #${executionCount} logged`);
         
         if (currentTime - lastUpdate < UPDATE_COOLDOWN) {
             const waitTime = Math.ceil((UPDATE_COOLDOWN - (currentTime - lastUpdate)) / 1000);
-            writeLog(`Cooldown active. Channel will update in ${waitTime} seconds`);
+            addLog(`Cooldown: ${waitTime}s remaining`);
             res.json({ 
                 success: true, 
                 count: executionCount,
-                message: `Execution logged. Channel updates in ${waitTime}s due to Discord rate limits` 
+                cooldown: waitTime
             });
             return;
         }
         
+        addLog('Attempting to update channel...');
         const channel = await client.channels.fetch(config.channelId);
+        
         if (channel && channel.isVoiceBased()) {
             await channel.setName(`Executions: ${executionCount}`);
             lastUpdate = currentTime;
-            writeLog(`Channel updated to: Executions: ${executionCount}`);
+            addLog(`SUCCESS: Channel renamed to "Executions: ${executionCount}"`);
             res.json({ success: true, count: executionCount, updated: true });
         } else {
-            writeLog('ERROR: Channel not found or not voice channel');
+            addLog('ERROR: Channel not found');
             res.status(404).json({ success: false, error: 'Channel not found' });
         }
     } catch (error) {
-        writeLog(`ERROR: ${error.message}`);
+        addLog(`ERROR: ${error.message}`);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -97,31 +100,24 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'online', 
         executions: executionCount,
-        lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never'
+        lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never',
+        botReady: client.isReady()
     });
 });
 
 app.get('/logs', (req, res) => {
-    try {
-        if (fs.existsSync(logFile)) {
-            const logs = fs.readFileSync(logFile, 'utf8');
-            res.type('text/plain').send(logs);
-        } else {
-            res.send('No logs yet');
-        }
-    } catch (error) {
-        res.status(500).send('Error reading logs');
-    }
+    res.type('text/plain').send(logs.join('\n') || 'No logs yet');
 });
 
 setInterval(() => {
     fetch(`http://localhost:${config.port}/`)
-        .then(() => console.log('Keep-alive'))
         .catch(() => {});
 }, 600000);
 
 app.listen(config.port, () => {
-    writeLog(`Server running on port ${config.port}`);
+    addLog(`Server running on port ${config.port}`);
 });
 
-client.login(config.token);
+client.login(config.token).catch(err => {
+    addLog(`Login error: ${err.message}`);
+});
