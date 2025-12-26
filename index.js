@@ -14,19 +14,19 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-const executionsFile = path.join(__dirname, 'Executions.txt');
 const UPDATE_COOLDOWN = 2 * 60 * 1000;
 
 let executionCount = 0;
 let lastUpdate = 0;
 
+const executionsFile = path.join(__dirname, 'Executions.txt');
+
 function loadExecutions() {
     try {
-        if (fs.existsSync(executionsFile)) {
-            const raw = fs.readFileSync(executionsFile, 'utf8').trim();
-            const n = tonumber(raw);
-            if (!isNaN(n) && n >= 0) executionCount = n;
-        }
+        if (!fs.existsSync(executionsFile)) return;
+        const raw = fs.readFileSync(executionsFile, 'utf8').trim();
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0) executionCount = Math.floor(n);
     } catch {}
 }
 
@@ -36,6 +36,19 @@ function saveExecutions() {
     } catch {}
 }
 
+async function renameChannelSafe() {
+    const channel = await client.channels.fetch(config.channelId);
+    if (!channel) return;
+
+    if (!channel.isVoiceBased()) return;
+
+    const perms = channel.permissionsFor(client.user);
+    if (!perms || !perms.has(PermissionFlagsBits.ManageChannels)) return;
+
+    await channel.setName(`Executions: ${executionCount}`);
+    lastUpdate = Date.now();
+}
+
 client.once('ready', async () => {
     console.log(`Bot online as ${client.user.tag}`);
 
@@ -43,21 +56,9 @@ client.once('ready', async () => {
     console.log(`Loaded executions: ${executionCount}`);
 
     try {
-        const channel = await client.channels.fetch(config.channelId);
-        if (!channel) return;
-
-        const perms = channel.permissionsFor(client.user);
-        if (!perms || !perms.has(PermissionFlagsBits.ManageChannels)) {
-            console.log('Missing MANAGE_CHANNELS');
-            return;
-        }
-
-        if (channel.isVoiceBased()) {
-            await channel.setName(`Executions: ${executionCount}`);
-            lastUpdate = Date.now();
-        }
+        await renameChannelSafe();
     } catch (e) {
-        console.log('Ready error:', e.message);
+        console.log(`Rename on ready failed: ${e.message}`);
     }
 });
 
@@ -67,23 +68,39 @@ app.post('/execution', async (req, res) => {
         saveExecutions();
 
         const now = Date.now();
-        if (now - lastUpdate < UPDATE_COOLDOWN) {
-            res.json({ success: true, count: executionCount, updated: false });
-            return;
+        if (now - lastUpdate >= UPDATE_COOLDOWN) {
+            try {
+                await renameChannelSafe();
+            } catch (e) {
+                console.log(`Rename failed: ${e.message}`);
+            }
         }
 
-        const channel = await client.channels.fetch(config.channelId);
-        if (channel && channel.isVoiceBased()) {
-            await channel.setName(`Executions: ${executionCount}`);
-            lastUpdate = now;
-            res.json({ success: true, count: executionCount, updated: true });
-            return;
-        }
-
-        res.status(404).json({ success: false, error: 'Channel not found' });
+        res.json({
+            success: true,
+            count: executionCount,
+            lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never'
+        });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
+});
+
+app.post('/import', (req, res) => {
+    const n = Number(req.body && req.body.count);
+    if (!Number.isFinite(n) || n < 0) {
+        res.status(400).json({ success: false });
+        return;
+    }
+
+    executionCount = Math.floor(n);
+    saveExecutions();
+
+    res.json({ success: true, count: executionCount });
+});
+
+app.get('/export', (req, res) => {
+    res.type('text/plain').send(String(executionCount));
 });
 
 app.get('/', (req, res) => {
