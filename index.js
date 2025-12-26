@@ -17,14 +17,28 @@ let executionCount = 0;
 client.once('ready', async () => {
     console.log(`Bot online as ${client.user.tag}`);
     
-    const channel = await client.channels.fetch(config.channelId);
-    if (channel) {
+    try {
+        const channel = await client.channels.fetch(config.channelId);
+        
+        if (!channel) {
+            console.error('Channel not found! Check CHANNEL_ID');
+            return;
+        }
+        
+        if (!channel.isVoiceBased()) {
+            console.error('Channel is not a voice channel!');
+            return;
+        }
+        
         const currentName = channel.name;
         const match = currentName.match(/Executions:\s*(\d+)/);
         if (match) {
             executionCount = parseInt(match[1]);
         }
         console.log(`Current executions: ${executionCount}`);
+    } catch (error) {
+        console.error('Error fetching channel:', error.message);
+        console.error('Make sure bot has VIEW_CHANNELS and MANAGE_CHANNELS permissions!');
     }
 });
 

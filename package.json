@@ -4,15 +4,11 @@
   "description": "Execution counter bot",
   "main": "index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.25.1",
+    "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
     "express": "^4.18.2"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  }
 }
