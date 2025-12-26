@@ -21,56 +21,92 @@ let lastUpdate = 0;
 
 const executionsFile = path.join(__dirname, 'Executions.txt');
 
-function loadExecutions() {
+function parseExecutionsFromChannelName(name) {
+    const m = String(name || '').match(/Executions:\s*(\d+)/i);
+    return m ? Number(m[1]) : null;
+}
+
+function readExecutionsFile() {
     try {
-        if (!fs.existsSync(executionsFile)) return;
+        if (!fs.existsSync(executionsFile)) return null;
         const raw = fs.readFileSync(executionsFile, 'utf8').trim();
         const n = Number(raw);
-        if (Number.isFinite(n) && n >= 0) executionCount = Math.floor(n);
+        if (Number.isFinite(n) && n >= 0) return Math.floor(n);
     } catch {}
+    return null;
 }
 
-function saveExecutions() {
+function writeExecutionsFile(n) {
     try {
-        fs.writeFileSync(executionsFile, String(executionCount));
-    } catch {}
+        fs.writeFileSync(executionsFile, String(n));
+        return true;
+    } catch {
+        return false;
+    }
 }
 
-async function renameChannelSafe() {
+async function fetchChannel() {
     const channel = await client.channels.fetch(config.channelId);
-    if (!channel) return;
+    if (!channel) return null;
+    if (!channel.isVoiceBased()) return null;
+    return channel;
+}
 
-    if (!channel.isVoiceBased()) return;
-
+async function renameChannelSafe(channel) {
     const perms = channel.permissionsFor(client.user);
-    if (!perms || !perms.has(PermissionFlagsBits.ManageChannels)) return;
-
+    if (!perms || !perms.has(PermissionFlagsBits.ManageChannels)) return false;
     await channel.setName(`Executions: ${executionCount}`);
     lastUpdate = Date.now();
+    return true;
 }
 
 client.once('ready', async () => {
     console.log(`Bot online as ${client.user.tag}`);
 
-    loadExecutions();
-    console.log(`Loaded executions: ${executionCount}`);
-
     try {
-        await renameChannelSafe();
+        const channel = await fetchChannel();
+        if (!channel) {
+            console.log('Channel not found / not voice');
+            return;
+        }
+
+        const fromFile = readExecutionsFile();
+        if (fromFile !== null) {
+            executionCount = fromFile;
+            console.log(`Loaded from Executions.txt: ${executionCount}`);
+            try {
+                await renameChannelSafe(channel);
+            } catch (e) {
+                console.log(`Rename on ready failed: ${e.message}`);
+            }
+            return;
+        }
+
+        const fromChannel = parseExecutionsFromChannelName(channel.name);
+        if (fromChannel !== null) {
+            executionCount = fromChannel;
+            writeExecutionsFile(executionCount);
+            console.log(`Saved from channel name into Executions.txt: ${executionCount}`);
+        } else {
+            executionCount = 0;
+            writeExecutionsFile(executionCount);
+            console.log('No number in channel name, set to 0');
+        }
     } catch (e) {
-        console.log(`Rename on ready failed: ${e.message}`);
+        console.log(`Ready error: ${e.message}`);
     }
 });
 
 app.post('/execution', async (req, res) => {
     try {
         executionCount++;
-        saveExecutions();
+        writeExecutionsFile(executionCount);
 
         const now = Date.now();
         if (now - lastUpdate >= UPDATE_COOLDOWN) {
             try {
-                await renameChannelSafe();
+                const channel = await fetchChannel();
+                if (channel) await renameChannelSafe(channel);
             } catch (e) {
                 console.log(`Rename failed: ${e.message}`);
             }
@@ -86,7 +122,28 @@ app.post('/execution', async (req, res) => {
     }
 });
 
-app.post('/import', (req, res) => {
+app.get('/export', async (req, res) => {
+    try {
+        const channel = await fetchChannel();
+        if (!channel) {
+            res.status(404).type('text/plain').send('0');
+            return;
+        }
+
+        const n = parseExecutionsFromChannelName(channel.name);
+        if (n === null) {
+            res.type('text/plain').send('0');
+            return;
+        }
+
+        writeExecutionsFile(n);
+        res.type('text/plain').send(String(n));
+    } catch {
+        res.status(500).type('text/plain').send(String(executionCount));
+    }
+});
+
+app.post('/import', async (req, res) => {
     const n = Number(req.body && req.body.count);
     if (!Number.isFinite(n) || n < 0) {
         res.status(400).json({ success: false });
@@ -94,13 +151,14 @@ app.post('/import', (req, res) => {
     }
 
     executionCount = Math.floor(n);
-    saveExecutions();
+    writeExecutionsFile(executionCount);
+
+    try {
+        const channel = await fetchChannel();
+        if (channel) await renameChannelSafe(channel);
+    } catch {}
 
     res.json({ success: true, count: executionCount });
-});
-
-app.get('/export', (req, res) => {
-    res.type('text/plain').send(String(executionCount));
 });
 
 app.get('/', (req, res) => {
