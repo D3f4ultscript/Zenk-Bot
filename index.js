@@ -16,7 +16,7 @@ app.use(express.json());
 
 let executionCount = 0;
 let lastUpdate = 0;
-const UPDATE_COOLDOWN = 5 * 60 * 1000;
+const UPDATE_COOLDOWN = 2 * 60 * 1000;
 const logFile = path.join(__dirname, 'logs.txt');
 
 function addLog(message) {
@@ -64,35 +64,30 @@ client.once('ready', async () => {
 });
 
 app.post('/execution', async (req, res) => {
-    addLog('Execution received');
-    
     try {
         executionCount++;
-        const currentTime = Date.now();
-        
-        addLog(`Count: ${executionCount}`);
-        
-        if (currentTime - lastUpdate < UPDATE_COOLDOWN) {
-            const waitTime = Math.ceil((UPDATE_COOLDOWN - (currentTime - lastUpdate)) / 1000);
-            addLog(`Cooldown: ${waitTime}s`);
-            res.json({ success: true, count: executionCount });
+        const now = Date.now();
+
+        addLog(`Execution #${executionCount}`);
+
+        if (now - lastUpdate < UPDATE_COOLDOWN) {
+            res.json({ success: true, count: executionCount, updated: false });
             return;
         }
-        
+
         const channel = await client.channels.fetch(config.channelId);
-        
         if (channel && channel.isVoiceBased()) {
             await channel.setName(`Executions: ${executionCount}`);
-            lastUpdate = currentTime;
-            addLog(`Channel updated: ${executionCount}`);
+            lastUpdate = now;
+            addLog(`Channel updated: Executions: ${executionCount}`);
             res.json({ success: true, count: executionCount, updated: true });
-        } else {
-            addLog('ERROR: Channel not found');
-            res.status(404).json({ success: false });
+            return;
         }
-    } catch (error) {
-        addLog(`ERROR: ${error.message}`);
-        res.status(500).json({ success: false, error: error.message });
+
+        res.status(404).json({ success: false, error: 'Channel not found' });
+    } catch (e) {
+        addLog(`ERROR: ${e.message}`);
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
