@@ -8,7 +8,10 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildWebhooks
   ]
 });
 
@@ -17,11 +20,15 @@ app.use(express.json());
 
 const UPDATE_COOLDOWN = 8 * 60 * 1000;
 const MEMBER_UPDATE_INTERVAL = 10 * 60 * 1000;
+const WEBHOOK_SPAM_THRESHOLD = 10;
+const WEBHOOK_SPAM_TIMEFRAME = 8000;
 
 let executionCount = 0;
 let lastUpdate = 0;
 
 const executionsFile = path.join(__dirname, 'Executions.txt');
+const webhookMessageTracker = new Map();
+const webhookNamesCache = new Map();
 
 function parseExecutionsFromChannelName(name) {
   const m = String(name || '').match(/Executions:\s*(\d+)/i);
@@ -81,6 +88,28 @@ async function updateMemberCount() {
   }
 }
 
+async function fetchWebhookOriginalName(webhookId, channelId) {
+  try {
+    if (webhookNamesCache.has(webhookId)) {
+      return webhookNamesCache.get(webhookId);
+    }
+
+    const channel = await client.channels.fetch(channelId);
+    if (!channel) return null;
+
+    const webhooks = await channel.fetchWebhooks();
+    const webhook = webhooks.get(webhookId);
+    
+    if (webhook) {
+      webhookNamesCache.set(webhookId, webhook.name);
+      return webhook.name;
+    }
+  } catch (e) {
+    console.log(`Failed to fetch webhook: ${e.message}`);
+  }
+  return null;
+}
+
 client.once('ready', async () => {
   console.log(`Bot online as ${client.user.tag}`);
   
@@ -131,6 +160,42 @@ client.on('guildMemberAdd', async () => {
 
 client.on('guildMemberRemove', async () => {
   await updateMemberCount();
+});
+
+client.on('messageCreate', async (message) => {
+  if (!message.webhookId) return;
+
+  try {
+    const webhookId = message.webhookId;
+    const now = Date.now();
+
+    const originalName = await fetchWebhookOriginalName(webhookId, message.channelId);
+    
+    if (originalName && message.author.username !== originalName) {
+      await message.delete();
+      console.log(`Deleted webhook message: Name mismatch (${message.author.username} != ${originalName})`);
+      return;
+    }
+
+    if (!webhookMessageTracker.has(webhookId)) {
+      webhookMessageTracker.set(webhookId, []);
+    }
+
+    const messages = webhookMessageTracker.get(webhookId);
+    messages.push({ timestamp: now, messageId: message.id });
+
+    const recentMessages = messages.filter(msg => now - msg.timestamp < WEBHOOK_SPAM_TIMEFRAME);
+    webhookMessageTracker.set(webhookId, recentMessages);
+
+    if (recentMessages.length >= WEBHOOK_SPAM_THRESHOLD) {
+      await message.delete();
+      console.log(`Deleted webhook spam message: ${recentMessages.length} messages in ${WEBHOOK_SPAM_TIMEFRAME}ms`);
+      
+      webhookMessageTracker.set(webhookId, []);
+    }
+  } catch (e) {
+    console.log(`Webhook message check failed: ${e.message}`);
+  }
 });
 
 app.post('/execution', async (req, res) => {
