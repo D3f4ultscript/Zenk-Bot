@@ -22,12 +22,19 @@ const UPDATE_COOLDOWN = 8 * 60 * 1000;
 const MEMBER_UPDATE_INTERVAL = 10 * 60 * 1000;
 const WEBHOOK_SPAM_THRESHOLD = 10;
 const WEBHOOK_SPAM_TIMEFRAME = 8000;
+const SPAM_COOLDOWN_DURATION = 30000;
 const REQUIRED_WEBHOOK_NAME = 'Zenk';
+
+const BLACKLIST = [
+  'fuck', 'shit', 'bitch', 'ass', 'asshole', 'bastard', 'damn', 'cunt', 'dick', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'piss', 'prick', 'twat', 'wanker', 'bollocks', 'arse', 'tosser', 'bellend',
+  'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arsch', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'bastard', 'schwuchtel', 'schwul', 'dumm', 'idiot', 'trottel', 'vollidiot', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'pisser', 'kacke', 'scheisskerl', 'wixer', 'spast', 'mongo', 'behinderter', 'opfer', 'penner', 'dreckskerl', 'arschlecker', 'pissnelke', 'fotznbrädl', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich', 'halt die fresse', 'fresse', 'halt maul', 'maul'
+];
 
 let executionCount = 0;
 let lastUpdate = 0;
 const executionsFile = path.join(__dirname, 'Executions.txt');
 const webhookMessageTracker = new Map();
+const webhookSpamCooldown = new Map();
 
 function parseExecutionsFromChannelName(name) {
   const m = String(name || '').match(/Executions:\s*(\d+)/i);
@@ -95,6 +102,28 @@ async function restoreWebhookName(webhookId, channelId) {
   }
 }
 
+function containsBlacklistedWord(text) {
+  const lowerText = text.toLowerCase();
+  return BLACKLIST.some(word => lowerText.includes(word));
+}
+
+async function bulkDeleteWebhookMessages(channel, messageIds) {
+  try {
+    const validIds = messageIds.filter(id => id);
+    if (validIds.length === 0) return;
+    
+    if (validIds.length === 1) {
+      const msg = await channel.messages.fetch(validIds[0]).catch(() => null);
+      if (msg) await msg.delete();
+    } else {
+      await channel.bulkDelete(validIds, true);
+    }
+    console.log(`Bulk deleted ${validIds.length} webhook messages`);
+  } catch (e) {
+    console.log(`Bulk delete failed: ${e.message}`);
+  }
+}
+
 client.once('ready', async () => {
   console.log(`Bot online as ${client.user.tag}`);
   try {
@@ -130,11 +159,29 @@ client.on('messageCreate', async (message) => {
   try {
     const webhookId = message.webhookId;
     const now = Date.now();
+
+    if (webhookSpamCooldown.has(webhookId)) {
+      const cooldownEnd = webhookSpamCooldown.get(webhookId);
+      if (now < cooldownEnd) {
+        await message.delete();
+        console.log(`Deleted: Webhook in spam cooldown`);
+        return;
+      } else {
+        webhookSpamCooldown.delete(webhookId);
+        webhookMessageTracker.delete(webhookId);
+      }
+    }
     
     if (message.author.username !== REQUIRED_WEBHOOK_NAME) {
       await message.delete();
       console.log(`Deleted: Webhook name mismatch (${message.author.username})`);
       await restoreWebhookName(webhookId, message.channelId);
+      return;
+    }
+
+    if (containsBlacklistedWord(message.content)) {
+      await message.delete();
+      console.log(`Deleted: Blacklisted word detected`);
       return;
     }
 
@@ -146,9 +193,15 @@ client.on('messageCreate', async (message) => {
     webhookMessageTracker.set(webhookId, recentMessages);
 
     if (recentMessages.length >= WEBHOOK_SPAM_THRESHOLD) {
-      await message.delete();
-      console.log(`Deleted: Webhook spam (${recentMessages.length} msgs in 8s)`);
+      console.log(`Spam detected: ${recentMessages.length} msgs in 8s - activating spam protection`);
+      
+      const messageIdsToDelete = recentMessages.map(m => m.messageId);
+      await bulkDeleteWebhookMessages(message.channel, messageIdsToDelete);
+      
+      webhookSpamCooldown.set(webhookId, now + SPAM_COOLDOWN_DURATION);
       webhookMessageTracker.set(webhookId, []);
+      
+      console.log(`Webhook spam cooldown activated for 30s`);
     }
   } catch (e) {
     console.log(`Webhook check failed: ${e.message}`);
