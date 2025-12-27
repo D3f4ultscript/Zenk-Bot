@@ -22,13 +22,12 @@ const UPDATE_COOLDOWN = 8 * 60 * 1000;
 const MEMBER_UPDATE_INTERVAL = 10 * 60 * 1000;
 const WEBHOOK_SPAM_THRESHOLD = 10;
 const WEBHOOK_SPAM_TIMEFRAME = 8000;
+const REQUIRED_WEBHOOK_NAME = 'Zenk';
 
 let executionCount = 0;
 let lastUpdate = 0;
-
 const executionsFile = path.join(__dirname, 'Executions.txt');
 const webhookMessageTracker = new Map();
-const webhookNamesCache = new Map();
 
 function parseExecutionsFromChannelName(name) {
   const m = String(name || '').match(/Executions:\s*(\d+)/i);
@@ -56,8 +55,7 @@ function writeExecutionsFile(n) {
 
 async function fetchChannel(channelId) {
   const channel = await client.channels.fetch(channelId);
-  if (!channel) return null;
-  if (!channel.isVoiceBased()) return null;
+  if (!channel || !channel.isVoiceBased()) return null;
   return channel;
 }
 
@@ -71,16 +69,10 @@ async function renameChannelSafe(channel, newName) {
 async function updateMemberCount() {
   try {
     const memberChannel = await fetchChannel(config.memberChannelId);
-    if (!memberChannel) {
-      console.log('Member channel not found');
-      return;
-    }
-
+    if (!memberChannel) return;
     const guild = memberChannel.guild;
     await guild.members.fetch();
-    
-    const nonBotMembers = guild.members.cache.filter(member => !member.user.bot).size;
-    
+    const nonBotMembers = guild.members.cache.filter(m => !m.user.bot).size;
     await renameChannelSafe(memberChannel, `Member: ${nonBotMembers}`);
     console.log(`Updated member count: ${nonBotMembers}`);
   } catch (e) {
@@ -88,63 +80,38 @@ async function updateMemberCount() {
   }
 }
 
-async function fetchWebhookOriginalName(webhookId, channelId) {
+async function restoreWebhookName(webhookId, channelId) {
   try {
-    if (webhookNamesCache.has(webhookId)) {
-      return webhookNamesCache.get(webhookId);
-    }
-
     const channel = await client.channels.fetch(channelId);
-    if (!channel) return null;
-
+    if (!channel) return;
     const webhooks = await channel.fetchWebhooks();
     const webhook = webhooks.get(webhookId);
-    
-    if (webhook) {
-      webhookNamesCache.set(webhookId, webhook.name);
-      return webhook.name;
+    if (webhook && webhook.name !== REQUIRED_WEBHOOK_NAME) {
+      await webhook.edit({ name: REQUIRED_WEBHOOK_NAME });
+      console.log(`Restored webhook name to: ${REQUIRED_WEBHOOK_NAME}`);
     }
   } catch (e) {
-    console.log(`Failed to fetch webhook: ${e.message}`);
+    console.log(`Failed to restore webhook: ${e.message}`);
   }
-  return null;
 }
 
 client.once('ready', async () => {
   console.log(`Bot online as ${client.user.tag}`);
-  
   try {
     const channel = await fetchChannel(config.channelId);
-    if (!channel) {
-      console.log('Channel not found / not voice');
-      return;
-    }
+    if (!channel) return;
 
     const fromFile = readExecutionsFile();
     if (fromFile !== null) {
       executionCount = fromFile;
       console.log(`Loaded from Executions.txt: ${executionCount}`);
-      try {
-        await renameChannelSafe(channel, `Executions: ${executionCount}`);
-        lastUpdate = Date.now();
-      } catch (e) {
-        console.log(`Rename on ready failed: ${e.message}`);
-      }
-      
-      await updateMemberCount();
-      setInterval(updateMemberCount, MEMBER_UPDATE_INTERVAL);
-      return;
-    }
-
-    const fromChannel = parseExecutionsFromChannelName(channel.name);
-    if (fromChannel !== null) {
-      executionCount = fromChannel;
-      writeExecutionsFile(executionCount);
-      console.log(`Saved from channel name into Executions.txt: ${executionCount}`);
+      await renameChannelSafe(channel, `Executions: ${executionCount}`);
+      lastUpdate = Date.now();
     } else {
-      executionCount = 0;
+      const fromChannel = parseExecutionsFromChannelName(channel.name);
+      executionCount = fromChannel !== null ? fromChannel : 0;
       writeExecutionsFile(executionCount);
-      console.log('No number in channel name, set to 0');
+      console.log(`Set executions to: ${executionCount}`);
     }
 
     await updateMemberCount();
@@ -154,13 +121,8 @@ client.once('ready', async () => {
   }
 });
 
-client.on('guildMemberAdd', async () => {
-  await updateMemberCount();
-});
-
-client.on('guildMemberRemove', async () => {
-  await updateMemberCount();
-});
+client.on('guildMemberAdd', updateMemberCount);
+client.on('guildMemberRemove', updateMemberCount);
 
 client.on('messageCreate', async (message) => {
   if (!message.webhookId) return;
@@ -168,19 +130,15 @@ client.on('messageCreate', async (message) => {
   try {
     const webhookId = message.webhookId;
     const now = Date.now();
-
-    const originalName = await fetchWebhookOriginalName(webhookId, message.channelId);
     
-    if (originalName && message.author.username !== originalName) {
+    if (message.author.username !== REQUIRED_WEBHOOK_NAME) {
       await message.delete();
-      console.log(`Deleted webhook message: Name mismatch (${message.author.username} != ${originalName})`);
+      console.log(`Deleted: Webhook name mismatch (${message.author.username})`);
+      await restoreWebhookName(webhookId, message.channelId);
       return;
     }
 
-    if (!webhookMessageTracker.has(webhookId)) {
-      webhookMessageTracker.set(webhookId, []);
-    }
-
+    if (!webhookMessageTracker.has(webhookId)) webhookMessageTracker.set(webhookId, []);
     const messages = webhookMessageTracker.get(webhookId);
     messages.push({ timestamp: now, messageId: message.id });
 
@@ -189,12 +147,25 @@ client.on('messageCreate', async (message) => {
 
     if (recentMessages.length >= WEBHOOK_SPAM_THRESHOLD) {
       await message.delete();
-      console.log(`Deleted webhook spam message: ${recentMessages.length} messages in ${WEBHOOK_SPAM_TIMEFRAME}ms`);
-      
+      console.log(`Deleted: Webhook spam (${recentMessages.length} msgs in 8s)`);
       webhookMessageTracker.set(webhookId, []);
     }
   } catch (e) {
-    console.log(`Webhook message check failed: ${e.message}`);
+    console.log(`Webhook check failed: ${e.message}`);
+  }
+});
+
+client.on('webhookUpdate', async (channel) => {
+  try {
+    const webhooks = await channel.fetchWebhooks();
+    webhooks.forEach(async (webhook) => {
+      if (webhook.name !== REQUIRED_WEBHOOK_NAME) {
+        await webhook.edit({ name: REQUIRED_WEBHOOK_NAME });
+        console.log(`Auto-restored webhook name in #${channel.name}`);
+      }
+    });
+  } catch (e) {
+    console.log(`Webhook update check failed: ${e.message}`);
   }
 });
 
@@ -202,25 +173,15 @@ app.post('/execution', async (req, res) => {
   try {
     executionCount++;
     writeExecutionsFile(executionCount);
-
     const now = Date.now();
     if (now - lastUpdate >= UPDATE_COOLDOWN) {
-      try {
-        const channel = await fetchChannel(config.channelId);
-        if (channel) {
-          await renameChannelSafe(channel, `Executions: ${executionCount}`);
-          lastUpdate = Date.now();
-        }
-      } catch (e) {
-        console.log(`Rename failed: ${e.message}`);
+      const channel = await fetchChannel(config.channelId);
+      if (channel) {
+        await renameChannelSafe(channel, `Executions: ${executionCount}`);
+        lastUpdate = Date.now();
       }
     }
-
-    res.json({
-      success: true,
-      count: executionCount,
-      lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never'
-    });
+    res.json({ success: true, count: executionCount, lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never' });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -229,17 +190,9 @@ app.post('/execution', async (req, res) => {
 app.get('/export', async (req, res) => {
   try {
     const channel = await fetchChannel(config.channelId);
-    if (!channel) {
-      res.status(404).type('text/plain').send('0');
-      return;
-    }
-
+    if (!channel) return res.status(404).type('text/plain').send('0');
     const n = parseExecutionsFromChannelName(channel.name);
-    if (n === null) {
-      res.type('text/plain').send('0');
-      return;
-    }
-
+    if (n === null) return res.type('text/plain').send('0');
     writeExecutionsFile(n);
     res.type('text/plain').send(String(n));
   } catch {
@@ -249,14 +202,9 @@ app.get('/export', async (req, res) => {
 
 app.post('/import', async (req, res) => {
   const n = Number(req.body && req.body.count);
-  if (!Number.isFinite(n) || n < 0) {
-    res.status(400).json({ success: false });
-    return;
-  }
-
+  if (!Number.isFinite(n) || n < 0) return res.status(400).json({ success: false });
   executionCount = Math.floor(n);
   writeExecutionsFile(executionCount);
-
   try {
     const channel = await fetchChannel(config.channelId);
     if (channel) {
@@ -264,7 +212,6 @@ app.post('/import', async (req, res) => {
       lastUpdate = Date.now();
     }
   } catch {}
-
   res.json({ success: true, count: executionCount });
 });
 
@@ -277,8 +224,5 @@ app.get('/', (req, res) => {
   });
 });
 
-app.listen(config.port, () => {
-  console.log(`Server running on port ${config.port}`);
-});
-
+app.listen(config.port, () => console.log(`Server running on port ${config.port}`));
 client.login(config.token);
