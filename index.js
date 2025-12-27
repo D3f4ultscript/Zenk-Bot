@@ -15,7 +15,7 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-const UPDATE_COOLDOWN = 2 * 60 * 1000;
+const UPDATE_COOLDOWN = 8 * 60 * 1000;
 const MEMBER_UPDATE_INTERVAL = 10 * 60 * 1000;
 
 let executionCount = 0;
