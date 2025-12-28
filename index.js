@@ -1,328 +1,191 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildWebhooks
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildWebhooks]
 });
 
 const app = express();
 app.use(express.json());
 
-const UPDATE_COOLDOWN = 8 * 60 * 1000;
-const MEMBER_UPDATE_INTERVAL = 10 * 60 * 1000;
-const WEBHOOK_SPAM_THRESHOLD = 10;
-const WEBHOOK_SPAM_TIMEFRAME = 8000;
-const SPAM_COOLDOWN_DURATION = 30000;
-const TIMEOUT_DURATION = 10 * 60 * 1000;
-const REQUIRED_WEBHOOK_NAME = 'Zenk';
+const BLACKLIST_WEBHOOK = ['fuck', 'shit', 'bitch', 'ass', 'asshole', 'bastard', 'damn', 'cunt', 'dick', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'piss', 'prick', 'twat', 'wanker', 'bollocks', 'arse', 'tosser', 'bellend', 'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arsch', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'schwuchtel', 'schwul', 'dumm', 'idiot', 'trottel', 'vollidiot', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'pisser', 'kacke', 'scheisskerl', 'wixer', 'spast', 'mongo', 'behinderter', 'opfer', 'penner', 'dreckskerl', 'arschlecker', 'pissnelke', 'fotznbrädl', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich', 'halt die fresse', 'fresse', 'halt maul', 'maul'];
+const BLACKLIST_USERS = BLACKLIST_WEBHOOK.filter(w => w !== 'shit' && w !== 'ass');
 
-const BLACKLIST_WEBHOOK = [
-  'fuck', 'shit', 'bitch', 'ass', 'asshole', 'bastard', 'damn', 'cunt', 'dick', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'piss', 'prick', 'twat', 'wanker', 'bollocks', 'arse', 'tosser', 'bellend',
-  'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arsch', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'bastard', 'schwuchtel', 'schwul', 'dumm', 'idiot', 'trottel', 'vollidiot', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'pisser', 'kacke', 'scheisskerl', 'wixer', 'spast', 'mongo', 'behinderter', 'opfer', 'penner', 'dreckskerl', 'arschlecker', 'pissnelke', 'fotznbrädl', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich', 'halt die fresse', 'fresse', 'halt maul', 'maul'
-];
-
-const BLACKLIST_USERS = [
-  'fuck', 'bitch', 'asshole', 'bastard', 'damn', 'cunt', 'dick', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'piss', 'prick', 'twat', 'wanker', 'bollocks', 'arse', 'tosser', 'bellend',
-  'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arsch', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'bastard', 'schwuchtel', 'schwul', 'dumm', 'idiot', 'trottel', 'vollidiot', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'pisser', 'kacke', 'scheisskerl', 'wixer', 'spast', 'mongo', 'behinderter', 'opfer', 'penner', 'dreckskerl', 'arschlecker', 'pissnelke', 'fotznbrädl', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich', 'halt die fresse', 'fresse', 'halt maul', 'maul'
-];
-
-let executionCount = 0;
-let lastUpdate = 0;
+let executionCount = 0, lastUpdate = 0;
 const executionsFile = path.join(__dirname, 'Executions.txt');
-const webhookMessageTracker = new Map();
-const webhookSpamCooldown = new Map();
+const webhookTracker = new Map(), webhookCooldown = new Map();
 
-function parseExecutionsFromChannelName(name) {
-  const m = String(name || '').match(/Executions:\s*(\d+)/i);
-  return m ? Number(m[1]) : null;
-}
+const parseExecutions = (name) => { const m = String(name || '').match(/Executions:\s*(\d+)/i); return m ? Number(m[1]) : null; };
+const readFile = () => { try { if (!fs.existsSync(executionsFile)) return null; const n = Number(fs.readFileSync(executionsFile, 'utf8').trim()); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; } catch {} return null; };
+const writeFile = (n) => { try { fs.writeFileSync(executionsFile, String(n)); return true; } catch { return false; } };
+const fetchVC = async (id) => { const c = await client.channels.fetch(id); return c?.isVoiceBased() ? c : null; };
+const renameChannel = async (c, n) => { const p = c.permissionsFor(client.user); if (!p?.has(PermissionFlagsBits.ManageChannels)) return false; await c.setName(n); return true; };
+const hasBlacklist = (t, bl) => { if (!t) return false; const l = t.toLowerCase(); return bl.some(w => l.includes(w)); };
+const checkMsg = (m, bl) => { if (hasBlacklist(m.content, bl)) return true; if (m.embeds?.length) for (const e of m.embeds) { if (hasBlacklist(e.title, bl) || hasBlacklist(e.description, bl) || hasBlacklist(e.footer?.text, bl) || hasBlacklist(e.author?.name, bl)) return true; if (e.fields?.length) for (const f of e.fields) if (hasBlacklist(f.name, bl) || hasBlacklist(f.value, bl)) return true; } return false; };
+const parseDuration = (s) => { const m = s.match(/^(\d+)([smhd])$/); if (!m) return null; const v = parseInt(m[1]), u = m[2]; const t = { s: 1000, m: 60000, h: 3600000, d: 86400000 }; return v * t[u]; };
 
-function readExecutionsFile() {
+const updateMembers = async () => {
   try {
-    if (!fs.existsSync(executionsFile)) return null;
-    const raw = fs.readFileSync(executionsFile, 'utf8').trim();
-    const n = Number(raw);
-    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
-  } catch {}
-  return null;
-}
+    const c = await fetchVC(config.memberChannelId);
+    if (!c) return;
+    await c.guild.members.fetch();
+    const count = c.guild.members.cache.filter(m => !m.user.bot).size;
+    await renameChannel(c, `Member: ${count}`);
+  } catch (e) { console.log(`Member update failed: ${e.message}`); }
+};
 
-function writeExecutionsFile(n) {
+const restoreWebhook = async (wId, cId) => {
   try {
-    fs.writeFileSync(executionsFile, String(n));
-    return true;
-  } catch {
-    return false;
-  }
-}
+    const c = await client.channels.fetch(cId);
+    if (!c) return;
+    const whs = await c.fetchWebhooks();
+    const wh = whs.get(wId);
+    if (wh && wh.name !== 'Zenk') await wh.edit({ name: 'Zenk' });
+  } catch (e) { console.log(`Restore webhook failed: ${e.message}`); }
+};
 
-async function fetchChannel(channelId) {
-  const channel = await client.channels.fetch(channelId);
-  if (!channel || !channel.isVoiceBased()) return null;
-  return channel;
-}
-
-async function renameChannelSafe(channel, newName) {
-  const perms = channel.permissionsFor(client.user);
-  if (!perms || !perms.has(PermissionFlagsBits.ManageChannels)) return false;
-  await channel.setName(newName);
-  return true;
-}
-
-async function updateMemberCount() {
+const bulkDelete = async (c, ids) => {
   try {
-    const memberChannel = await fetchChannel(config.memberChannelId);
-    if (!memberChannel) return;
-    const guild = memberChannel.guild;
-    await guild.members.fetch();
-    const nonBotMembers = guild.members.cache.filter(m => !m.user.bot).size;
-    await renameChannelSafe(memberChannel, `Member: ${nonBotMembers}`);
-    console.log(`Updated member count: ${nonBotMembers}`);
-  } catch (e) {
-    console.log(`Member count update failed: ${e.message}`);
-  }
-}
-
-async function restoreWebhookName(webhookId, channelId) {
-  try {
-    const channel = await client.channels.fetch(channelId);
-    if (!channel) return;
-    const webhooks = await channel.fetchWebhooks();
-    const webhook = webhooks.get(webhookId);
-    if (webhook && webhook.name !== REQUIRED_WEBHOOK_NAME) {
-      await webhook.edit({ name: REQUIRED_WEBHOOK_NAME });
-      console.log(`Restored webhook name to: ${REQUIRED_WEBHOOK_NAME}`);
-    }
-  } catch (e) {
-    console.log(`Failed to restore webhook: ${e.message}`);
-  }
-}
-
-function containsBlacklistedWord(text, blacklist) {
-  if (!text) return false;
-  const lowerText = text.toLowerCase();
-  return blacklist.some(word => lowerText.includes(word));
-}
-
-function checkMessageForBlacklist(message, blacklist) {
-  if (containsBlacklistedWord(message.content, blacklist)) return true;
-  
-  if (message.embeds && message.embeds.length > 0) {
-    for (const embed of message.embeds) {
-      if (containsBlacklistedWord(embed.title, blacklist)) return true;
-      if (containsBlacklistedWord(embed.description, blacklist)) return true;
-      if (containsBlacklistedWord(embed.footer?.text, blacklist)) return true;
-      if (containsBlacklistedWord(embed.author?.name, blacklist)) return true;
-      
-      if (embed.fields && embed.fields.length > 0) {
-        for (const field of embed.fields) {
-          if (containsBlacklistedWord(field.name, blacklist)) return true;
-          if (containsBlacklistedWord(field.value, blacklist)) return true;
-        }
-      }
-    }
-  }
-  
-  return false;
-}
-
-async function bulkDeleteWebhookMessages(channel, messageIds) {
-  try {
-    const validIds = messageIds.filter(id => id);
-    if (validIds.length === 0) return;
-    
-    if (validIds.length === 1) {
-      const msg = await channel.messages.fetch(validIds[0]).catch(() => null);
-      if (msg) await msg.delete();
-    } else {
-      await channel.bulkDelete(validIds, true);
-    }
-    console.log(`Bulk deleted ${validIds.length} webhook messages`);
-  } catch (e) {
-    console.log(`Bulk delete failed: ${e.message}`);
-  }
-}
+    const v = ids.filter(id => id);
+    if (!v.length) return;
+    if (v.length === 1) { const m = await c.messages.fetch(v[0]).catch(() => null); if (m) await m.delete(); }
+    else await c.bulkDelete(v, true);
+  } catch (e) { console.log(`Bulk delete failed: ${e.message}`); }
+};
 
 client.once('ready', async () => {
   console.log(`Bot online as ${client.user.tag}`);
   try {
-    const channel = await fetchChannel(config.channelId);
-    if (!channel) return;
-
-    const fromFile = readExecutionsFile();
+    const c = await fetchVC(config.channelId);
+    if (!c) return;
+    const fromFile = readFile();
     if (fromFile !== null) {
       executionCount = fromFile;
-      console.log(`Loaded from Executions.txt: ${executionCount}`);
-      await renameChannelSafe(channel, `Executions: ${executionCount}`);
+      await renameChannel(c, `Executions: ${executionCount}`);
       lastUpdate = Date.now();
     } else {
-      const fromChannel = parseExecutionsFromChannelName(channel.name);
-      executionCount = fromChannel !== null ? fromChannel : 0;
-      writeExecutionsFile(executionCount);
-      console.log(`Set executions to: ${executionCount}`);
+      const fromChannel = parseExecutions(c.name);
+      executionCount = fromChannel ?? 0;
+      writeFile(executionCount);
     }
+    await updateMembers();
+    setInterval(updateMembers, 600000);
+  } catch (e) { console.log(`Ready error: ${e.message}`); }
 
-    await updateMemberCount();
-    setInterval(updateMemberCount, MEMBER_UPDATE_INTERVAL);
-  } catch (e) {
-    console.log(`Ready error: ${e.message}`);
-  }
+  const commands = [
+    new SlashCommandBuilder().setName('mute').setDescription('Timeout a user').addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true)).addStringOption(o => o.setName('duration').setDescription('Duration (e.g., 10s, 5m, 1h, 2d)').setRequired(true)),
+    new SlashCommandBuilder().setName('unmute').setDescription('Remove timeout from a user').addUserOption(o => o.setName('user').setDescription('User to unmute').setRequired(true))
+  ].map(c => c.toJSON());
+
+  const rest = new REST({ version: '10' }).setToken(config.token);
+  try {
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    console.log('Slash commands registered');
+  } catch (e) { console.log(`Command registration failed: ${e.message}`); }
 });
 
-client.on('guildMemberAdd', updateMemberCount);
-client.on('guildMemberRemove', updateMemberCount);
+client.on('guildMemberAdd', updateMembers);
+client.on('guildMemberRemove', updateMembers);
 
-client.on('messageCreate', async (message) => {
-  if (message.author.bot && !message.webhookId) return;
-
+client.on('messageCreate', async (m) => {
+  if (m.author.bot && !m.webhookId) return;
   try {
-    if (message.webhookId) {
-      const webhookId = message.webhookId;
-      const now = Date.now();
-
-      if (webhookSpamCooldown.has(webhookId)) {
-        const cooldownEnd = webhookSpamCooldown.get(webhookId);
-        if (now < cooldownEnd) {
-          await message.delete();
-          console.log(`Deleted: Webhook in spam cooldown`);
-          return;
-        } else {
-          webhookSpamCooldown.delete(webhookId);
-          webhookMessageTracker.delete(webhookId);
-        }
+    if (m.webhookId) {
+      const wId = m.webhookId, now = Date.now();
+      if (webhookCooldown.has(wId)) {
+        if (now < webhookCooldown.get(wId)) { await m.delete(); return; }
+        else { webhookCooldown.delete(wId); webhookTracker.delete(wId); }
       }
-      
-      if (message.author.username !== REQUIRED_WEBHOOK_NAME) {
-        await message.delete();
-        console.log(`Deleted: Webhook name mismatch (${message.author.username})`);
-        await restoreWebhookName(webhookId, message.channelId);
-        return;
-      }
-
-      if (checkMessageForBlacklist(message, BLACKLIST_WEBHOOK)) {
-        await message.delete();
-        console.log(`Deleted: Webhook blacklisted word detected`);
-        return;
-      }
-
-      if (!webhookMessageTracker.has(webhookId)) webhookMessageTracker.set(webhookId, []);
-      const messages = webhookMessageTracker.get(webhookId);
-      messages.push({ timestamp: now, messageId: message.id });
-
-      const recentMessages = messages.filter(msg => now - msg.timestamp < WEBHOOK_SPAM_TIMEFRAME);
-      webhookMessageTracker.set(webhookId, recentMessages);
-
-      if (recentMessages.length >= WEBHOOK_SPAM_THRESHOLD) {
-        console.log(`Spam detected: ${recentMessages.length} msgs in 8s - activating spam protection`);
-        
-        const messageIdsToDelete = recentMessages.map(m => m.messageId);
-        await bulkDeleteWebhookMessages(message.channel, messageIdsToDelete);
-        
-        webhookSpamCooldown.set(webhookId, now + SPAM_COOLDOWN_DURATION);
-        webhookMessageTracker.set(webhookId, []);
-        
-        console.log(`Webhook spam cooldown activated for 30s`);
+      if (m.author.username !== 'Zenk') { await m.delete(); await restoreWebhook(wId, m.channelId); return; }
+      if (checkMsg(m, BLACKLIST_WEBHOOK)) { await m.delete(); return; }
+      if (!webhookTracker.has(wId)) webhookTracker.set(wId, []);
+      const msgs = webhookTracker.get(wId);
+      msgs.push({ timestamp: now, messageId: m.id });
+      const recent = msgs.filter(msg => now - msg.timestamp < 8000);
+      webhookTracker.set(wId, recent);
+      if (recent.length >= 10) {
+        await bulkDelete(m.channel, recent.map(msg => msg.messageId));
+        webhookCooldown.set(wId, now + 30000);
+        webhookTracker.set(wId, []);
       }
     } else {
-      if (checkMessageForBlacklist(message, BLACKLIST_USERS)) {
-        await message.delete();
-        
-        const member = message.member;
-        if (member && member.moderatable) {
-          try {
-            await member.timeout(TIMEOUT_DURATION, 'Used blacklisted word');
-            console.log(`Timed out user ${message.author.tag} for 10 minutes`);
-          } catch (e) {
-            console.log(`Failed to timeout ${message.author.tag}: ${e.message}`);
-          }
+      if (checkMsg(m, BLACKLIST_USERS)) {
+        await m.delete();
+        if (m.member?.moderatable) {
+          try { await m.member.timeout(600000, 'Blacklisted word'); } catch (e) { console.log(`Timeout failed: ${e.message}`); }
         }
-        
-        console.log(`Deleted: User blacklisted word detected from ${message.author.tag}`);
       }
     }
-  } catch (e) {
-    console.log(`Message check failed: ${e.message}`);
-  }
+  } catch (e) { console.log(`Message check failed: ${e.message}`); }
 });
 
-client.on('webhookUpdate', async (channel) => {
+client.on('webhookUpdate', async (c) => {
   try {
-    const webhooks = await channel.fetchWebhooks();
-    webhooks.forEach(async (webhook) => {
-      if (webhook.name !== REQUIRED_WEBHOOK_NAME) {
-        await webhook.edit({ name: REQUIRED_WEBHOOK_NAME });
-        console.log(`Auto-restored webhook name in #${channel.name}`);
-      }
-    });
-  } catch (e) {
-    console.log(`Webhook update check failed: ${e.message}`);
-  }
+    const whs = await c.fetchWebhooks();
+    whs.forEach(async (wh) => { if (wh.name !== 'Zenk') await wh.edit({ name: 'Zenk' }); });
+  } catch (e) { console.log(`Webhook update failed: ${e.message}`); }
+});
+
+client.on('interactionCreate', async (i) => {
+  if (!i.isChatInputCommand()) return;
+  try {
+    if (i.commandName === 'mute') {
+      if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return i.reply({ content: 'No permissions', ephemeral: true });
+      const user = i.options.getUser('user');
+      const duration = i.options.getString('duration');
+      const ms = parseDuration(duration);
+      if (!ms || ms > 2419200000) return i.reply({ content: 'Invalid duration (max 28d)', ephemeral: true });
+      const member = await i.guild.members.fetch(user.id);
+      if (!member.moderatable) return i.reply({ content: 'Cannot timeout this user', ephemeral: true });
+      await member.timeout(ms, `Timed out by ${i.user.tag}`);
+      await i.reply({ content: `Timed out ${user.tag} for ${duration}`, ephemeral: true });
+    } else if (i.commandName === 'unmute') {
+      if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return i.reply({ content: 'No permissions', ephemeral: true });
+      const user = i.options.getUser('user');
+      const member = await i.guild.members.fetch(user.id);
+      if (!member.moderatable) return i.reply({ content: 'Cannot unmute this user', ephemeral: true });
+      await member.timeout(null, `Unmuted by ${i.user.tag}`);
+      await i.reply({ content: `Unmuted ${user.tag}`, ephemeral: true });
+    }
+  } catch (e) { console.log(`Command failed: ${e.message}`); await i.reply({ content: 'Command failed', ephemeral: true }).catch(() => {}); }
 });
 
 app.post('/execution', async (req, res) => {
   try {
-    executionCount++;
-    writeExecutionsFile(executionCount);
+    executionCount++; writeFile(executionCount);
     const now = Date.now();
-    if (now - lastUpdate >= UPDATE_COOLDOWN) {
-      const channel = await fetchChannel(config.channelId);
-      if (channel) {
-        await renameChannelSafe(channel, `Executions: ${executionCount}`);
-        lastUpdate = Date.now();
-      }
+    if (now - lastUpdate >= 480000) {
+      const c = await fetchVC(config.channelId);
+      if (c) { await renameChannel(c, `Executions: ${executionCount}`); lastUpdate = now; }
     }
     res.json({ success: true, count: executionCount, lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never' });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get('/export', async (req, res) => {
   try {
-    const channel = await fetchChannel(config.channelId);
-    if (!channel) return res.status(404).type('text/plain').send('0');
-    const n = parseExecutionsFromChannelName(channel.name);
+    const c = await fetchVC(config.channelId);
+    if (!c) return res.status(404).type('text/plain').send('0');
+    const n = parseExecutions(c.name);
     if (n === null) return res.type('text/plain').send('0');
-    writeExecutionsFile(n);
-    res.type('text/plain').send(String(n));
-  } catch {
-    res.status(500).type('text/plain').send(String(executionCount));
-  }
+    writeFile(n); res.type('text/plain').send(String(n));
+  } catch { res.status(500).type('text/plain').send(String(executionCount)); }
 });
 
 app.post('/import', async (req, res) => {
-  const n = Number(req.body && req.body.count);
+  const n = Number(req.body?.count);
   if (!Number.isFinite(n) || n < 0) return res.status(400).json({ success: false });
-  executionCount = Math.floor(n);
-  writeExecutionsFile(executionCount);
+  executionCount = Math.floor(n); writeFile(executionCount);
   try {
-    const channel = await fetchChannel(config.channelId);
-    if (channel) {
-      await renameChannelSafe(channel, `Executions: ${executionCount}`);
-      lastUpdate = Date.now();
-    }
+    const c = await fetchVC(config.channelId);
+    if (c) { await renameChannel(c, `Executions: ${executionCount}`); lastUpdate = Date.now(); }
   } catch {}
   res.json({ success: true, count: executionCount });
 });
 
-app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    executions: executionCount,
-    lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never',
-    botReady: client.isReady()
-  });
-});
-
+app.get('/', (req, res) => { res.json({ status: 'online', executions: executionCount, lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never', botReady: client.isReady() }); });
 app.listen(config.port, () => console.log(`Server running on port ${config.port}`));
 client.login(config.token);
