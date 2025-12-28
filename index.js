@@ -23,10 +23,16 @@ const MEMBER_UPDATE_INTERVAL = 10 * 60 * 1000;
 const WEBHOOK_SPAM_THRESHOLD = 10;
 const WEBHOOK_SPAM_TIMEFRAME = 8000;
 const SPAM_COOLDOWN_DURATION = 30000;
+const TIMEOUT_DURATION = 10 * 60 * 1000;
 const REQUIRED_WEBHOOK_NAME = 'Zenk';
 
-const BLACKLIST = [
+const BLACKLIST_WEBHOOK = [
   'fuck', 'shit', 'bitch', 'ass', 'asshole', 'bastard', 'damn', 'cunt', 'dick', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'piss', 'prick', 'twat', 'wanker', 'bollocks', 'arse', 'tosser', 'bellend',
+  'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arsch', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'bastard', 'schwuchtel', 'schwul', 'dumm', 'idiot', 'trottel', 'vollidiot', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'pisser', 'kacke', 'scheisskerl', 'wixer', 'spast', 'mongo', 'behinderter', 'opfer', 'penner', 'dreckskerl', 'arschlecker', 'pissnelke', 'fotznbrädl', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich', 'halt die fresse', 'fresse', 'halt maul', 'maul'
+];
+
+const BLACKLIST_USERS = [
+  'fuck', 'bitch', 'asshole', 'bastard', 'damn', 'cunt', 'dick', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'piss', 'prick', 'twat', 'wanker', 'bollocks', 'arse', 'tosser', 'bellend',
   'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arsch', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'bastard', 'schwuchtel', 'schwul', 'dumm', 'idiot', 'trottel', 'vollidiot', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'pisser', 'kacke', 'scheisskerl', 'wixer', 'spast', 'mongo', 'behinderter', 'opfer', 'penner', 'dreckskerl', 'arschlecker', 'pissnelke', 'fotznbrädl', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich', 'halt die fresse', 'fresse', 'halt maul', 'maul'
 ];
 
@@ -102,26 +108,26 @@ async function restoreWebhookName(webhookId, channelId) {
   }
 }
 
-function containsBlacklistedWord(text) {
+function containsBlacklistedWord(text, blacklist) {
   if (!text) return false;
   const lowerText = text.toLowerCase();
-  return BLACKLIST.some(word => lowerText.includes(word));
+  return blacklist.some(word => lowerText.includes(word));
 }
 
-function checkMessageForBlacklist(message) {
-  if (containsBlacklistedWord(message.content)) return true;
+function checkMessageForBlacklist(message, blacklist) {
+  if (containsBlacklistedWord(message.content, blacklist)) return true;
   
   if (message.embeds && message.embeds.length > 0) {
     for (const embed of message.embeds) {
-      if (containsBlacklistedWord(embed.title)) return true;
-      if (containsBlacklistedWord(embed.description)) return true;
-      if (containsBlacklistedWord(embed.footer?.text)) return true;
-      if (containsBlacklistedWord(embed.author?.name)) return true;
+      if (containsBlacklistedWord(embed.title, blacklist)) return true;
+      if (containsBlacklistedWord(embed.description, blacklist)) return true;
+      if (containsBlacklistedWord(embed.footer?.text, blacklist)) return true;
+      if (containsBlacklistedWord(embed.author?.name, blacklist)) return true;
       
       if (embed.fields && embed.fields.length > 0) {
         for (const field of embed.fields) {
-          if (containsBlacklistedWord(field.name)) return true;
-          if (containsBlacklistedWord(field.value)) return true;
+          if (containsBlacklistedWord(field.name, blacklist)) return true;
+          if (containsBlacklistedWord(field.value, blacklist)) return true;
         }
       }
     }
@@ -177,57 +183,75 @@ client.on('guildMemberAdd', updateMemberCount);
 client.on('guildMemberRemove', updateMemberCount);
 
 client.on('messageCreate', async (message) => {
-  if (!message.webhookId) return;
+  if (message.author.bot && !message.webhookId) return;
 
   try {
-    const webhookId = message.webhookId;
-    const now = Date.now();
+    if (message.webhookId) {
+      const webhookId = message.webhookId;
+      const now = Date.now();
 
-    if (webhookSpamCooldown.has(webhookId)) {
-      const cooldownEnd = webhookSpamCooldown.get(webhookId);
-      if (now < cooldownEnd) {
+      if (webhookSpamCooldown.has(webhookId)) {
+        const cooldownEnd = webhookSpamCooldown.get(webhookId);
+        if (now < cooldownEnd) {
+          await message.delete();
+          console.log(`Deleted: Webhook in spam cooldown`);
+          return;
+        } else {
+          webhookSpamCooldown.delete(webhookId);
+          webhookMessageTracker.delete(webhookId);
+        }
+      }
+      
+      if (message.author.username !== REQUIRED_WEBHOOK_NAME) {
         await message.delete();
-        console.log(`Deleted: Webhook in spam cooldown`);
+        console.log(`Deleted: Webhook name mismatch (${message.author.username})`);
+        await restoreWebhookName(webhookId, message.channelId);
         return;
-      } else {
-        webhookSpamCooldown.delete(webhookId);
-        webhookMessageTracker.delete(webhookId);
+      }
+
+      if (checkMessageForBlacklist(message, BLACKLIST_WEBHOOK)) {
+        await message.delete();
+        console.log(`Deleted: Webhook blacklisted word detected`);
+        return;
+      }
+
+      if (!webhookMessageTracker.has(webhookId)) webhookMessageTracker.set(webhookId, []);
+      const messages = webhookMessageTracker.get(webhookId);
+      messages.push({ timestamp: now, messageId: message.id });
+
+      const recentMessages = messages.filter(msg => now - msg.timestamp < WEBHOOK_SPAM_TIMEFRAME);
+      webhookMessageTracker.set(webhookId, recentMessages);
+
+      if (recentMessages.length >= WEBHOOK_SPAM_THRESHOLD) {
+        console.log(`Spam detected: ${recentMessages.length} msgs in 8s - activating spam protection`);
+        
+        const messageIdsToDelete = recentMessages.map(m => m.messageId);
+        await bulkDeleteWebhookMessages(message.channel, messageIdsToDelete);
+        
+        webhookSpamCooldown.set(webhookId, now + SPAM_COOLDOWN_DURATION);
+        webhookMessageTracker.set(webhookId, []);
+        
+        console.log(`Webhook spam cooldown activated for 30s`);
+      }
+    } else {
+      if (checkMessageForBlacklist(message, BLACKLIST_USERS)) {
+        await message.delete();
+        
+        const member = message.member;
+        if (member && member.moderatable) {
+          try {
+            await member.timeout(TIMEOUT_DURATION, 'Used blacklisted word');
+            console.log(`Timed out user ${message.author.tag} for 10 minutes`);
+          } catch (e) {
+            console.log(`Failed to timeout ${message.author.tag}: ${e.message}`);
+          }
+        }
+        
+        console.log(`Deleted: User blacklisted word detected from ${message.author.tag}`);
       }
     }
-    
-    if (message.author.username !== REQUIRED_WEBHOOK_NAME) {
-      await message.delete();
-      console.log(`Deleted: Webhook name mismatch (${message.author.username})`);
-      await restoreWebhookName(webhookId, message.channelId);
-      return;
-    }
-
-    if (checkMessageForBlacklist(message)) {
-      await message.delete();
-      console.log(`Deleted: Blacklisted word detected (content or embed)`);
-      return;
-    }
-
-    if (!webhookMessageTracker.has(webhookId)) webhookMessageTracker.set(webhookId, []);
-    const messages = webhookMessageTracker.get(webhookId);
-    messages.push({ timestamp: now, messageId: message.id });
-
-    const recentMessages = messages.filter(msg => now - msg.timestamp < WEBHOOK_SPAM_TIMEFRAME);
-    webhookMessageTracker.set(webhookId, recentMessages);
-
-    if (recentMessages.length >= WEBHOOK_SPAM_THRESHOLD) {
-      console.log(`Spam detected: ${recentMessages.length} msgs in 8s - activating spam protection`);
-      
-      const messageIdsToDelete = recentMessages.map(m => m.messageId);
-      await bulkDeleteWebhookMessages(message.channel, messageIdsToDelete);
-      
-      webhookSpamCooldown.set(webhookId, now + SPAM_COOLDOWN_DURATION);
-      webhookMessageTracker.set(webhookId, []);
-      
-      console.log(`Webhook spam cooldown activated for 30s`);
-    }
   } catch (e) {
-    console.log(`Webhook check failed: ${e.message}`);
+    console.log(`Message check failed: ${e.message}`);
   }
 });
 
