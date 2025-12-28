@@ -103,8 +103,31 @@ async function restoreWebhookName(webhookId, channelId) {
 }
 
 function containsBlacklistedWord(text) {
+  if (!text) return false;
   const lowerText = text.toLowerCase();
   return BLACKLIST.some(word => lowerText.includes(word));
+}
+
+function checkMessageForBlacklist(message) {
+  if (containsBlacklistedWord(message.content)) return true;
+  
+  if (message.embeds && message.embeds.length > 0) {
+    for (const embed of message.embeds) {
+      if (containsBlacklistedWord(embed.title)) return true;
+      if (containsBlacklistedWord(embed.description)) return true;
+      if (containsBlacklistedWord(embed.footer?.text)) return true;
+      if (containsBlacklistedWord(embed.author?.name)) return true;
+      
+      if (embed.fields && embed.fields.length > 0) {
+        for (const field of embed.fields) {
+          if (containsBlacklistedWord(field.name)) return true;
+          if (containsBlacklistedWord(field.value)) return true;
+        }
+      }
+    }
+  }
+  
+  return false;
 }
 
 async function bulkDeleteWebhookMessages(channel, messageIds) {
@@ -179,9 +202,9 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    if (containsBlacklistedWord(message.content)) {
+    if (checkMessageForBlacklist(message)) {
       await message.delete();
-      console.log(`Deleted: Blacklisted word detected`);
+      console.log(`Deleted: Blacklisted word detected (content or embed)`);
       return;
     }
 
