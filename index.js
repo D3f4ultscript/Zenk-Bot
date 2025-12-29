@@ -14,15 +14,17 @@ app.use(express.json());
 const BLACKLIST_WEBHOOK = ['fuck', 'shit', 'bitch', 'ass', 'asshole', 'bastard', 'damn', 'cunt', 'dick', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'piss', 'prick', 'twat', 'wanker', 'bollocks', 'arse', 'tosser', 'bellend', 'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arsch', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'schwuchtel', 'schwul', 'dumm', 'idiot', 'trottel', 'vollidiot', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'pisser', 'kacke', 'scheisskerl', 'wixer', 'spast', 'mongo', 'behinderter', 'opfer', 'penner', 'dreckskerl', 'arschlecker', 'pissnelke', 'fotznbrädl', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich', 'halt die fresse', 'fresse', 'halt maul', 'maul'];
 const BLACKLIST_USERS = BLACKLIST_WEBHOOK.filter(w => w !== 'shit' && w !== 'ass');
 
-let executionCount = 0, lastUpdate = 0;
+let executionCount = 0, downloadCount = 0, lastUpdate = 0, lastDownloadUpdate = 0;
 const executionsFile = path.join(__dirname, 'Executions.txt');
+const downloadsFile = path.join(__dirname, 'Downloads.txt');
 const setupFile = path.join(__dirname, 'Setup.json');
 const webhookTracker = new Map(), webhookCooldown = new Map();
 let setupConfig = {};
 
 const parseExecutions = (name) => { const m = String(name || '').match(/Executions:\s*(\d+)/i); return m ? Number(m[1]) : null; };
-const readFile = () => { try { if (!fs.existsSync(executionsFile)) return null; const n = Number(fs.readFileSync(executionsFile, 'utf8').trim()); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; } catch {} return null; };
-const writeFile = (n) => { try { fs.writeFileSync(executionsFile, String(n)); return true; } catch { return false; } };
+const parseDownloads = (name) => { const m = String(name || '').match(/Downloads:\s*(\d+)/i); return m ? Number(m[1]) : null; };
+const readFile = (file) => { try { if (!fs.existsSync(file)) return null; const n = Number(fs.readFileSync(file, 'utf8').trim()); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; } catch {} return null; };
+const writeFile = (file, n) => { try { fs.writeFileSync(file, String(n)); return true; } catch { return false; } };
 const readSetup = () => { try { if (!fs.existsSync(setupFile)) return {}; return JSON.parse(fs.readFileSync(setupFile, 'utf8')); } catch {} return {}; };
 const writeSetup = (data) => { try { fs.writeFileSync(setupFile, JSON.stringify(data, null, 2)); return true; } catch { return false; } };
 const fetchVC = async (id) => { const c = await client.channels.fetch(id); return c?.isVoiceBased() ? c : null; };
@@ -67,7 +69,7 @@ client.once('ready', async () => {
   try {
     const c = await fetchVC(config.channelId);
     if (!c) return;
-    const fromFile = readFile();
+    const fromFile = readFile(executionsFile);
     if (fromFile !== null) {
       executionCount = fromFile;
       await renameChannel(c, `Executions: ${executionCount}`);
@@ -75,11 +77,19 @@ client.once('ready', async () => {
     } else {
       const fromChannel = parseExecutions(c.name);
       executionCount = fromChannel ?? 0;
-      writeFile(executionCount);
+      writeFile(executionsFile, executionCount);
     }
     await updateMembers();
     setInterval(updateMembers, 600000);
   } catch (e) { console.log(`Ready error: ${e.message}`); }
+
+  try {
+    const fromFile = readFile(downloadsFile);
+    if (fromFile !== null) {
+      downloadCount = fromFile;
+      console.log(`Loaded downloads: ${downloadCount}`);
+    }
+  } catch (e) { console.log(`Download load error: ${e.message}`); }
 
   const commands = [
     new SlashCommandBuilder().setName('mute').setDescription('Timeout a user').addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true)).addStringOption(o => o.setName('duration').setDescription('Duration (e.g., 10s, 5m, 1h, 2d)').setRequired(true)),
@@ -192,7 +202,8 @@ client.on('interactionCreate', async (i) => {
 
 app.post('/execution', async (req, res) => {
   try {
-    executionCount++; writeFile(executionCount);
+    executionCount++; 
+    writeFile(executionsFile, executionCount);
     const now = Date.now();
     if (now - lastUpdate >= 480000) {
       const c = await fetchVC(config.channelId);
@@ -202,20 +213,38 @@ app.post('/execution', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+app.post('/track', async (req, res) => {
+  try {
+    downloadCount++;
+    writeFile(downloadsFile, downloadCount);
+    const now = Date.now();
+    if (now - lastDownloadUpdate >= 480000) {
+      const channel = await fetchVC('1455226125700694027');
+      if (channel) { 
+        await renameChannel(channel, `Downloads: ${downloadCount}`); 
+        lastDownloadUpdate = now;
+      }
+    }
+    res.json({ success: true, downloads: downloadCount });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 app.get('/export', async (req, res) => {
   try {
     const c = await fetchVC(config.channelId);
     if (!c) return res.status(404).type('text/plain').send('0');
     const n = parseExecutions(c.name);
     if (n === null) return res.type('text/plain').send('0');
-    writeFile(n); res.type('text/plain').send(String(n));
+    writeFile(executionsFile, n); 
+    res.type('text/plain').send(String(n));
   } catch { res.status(500).type('text/plain').send(String(executionCount)); }
 });
 
 app.post('/import', async (req, res) => {
   const n = Number(req.body?.count);
   if (!Number.isFinite(n) || n < 0) return res.status(400).json({ success: false });
-  executionCount = Math.floor(n); writeFile(executionCount);
+  executionCount = Math.floor(n); 
+  writeFile(executionsFile, executionCount);
   try {
     const c = await fetchVC(config.channelId);
     if (c) { await renameChannel(c, `Executions: ${executionCount}`); lastUpdate = Date.now(); }
@@ -223,6 +252,15 @@ app.post('/import', async (req, res) => {
   res.json({ success: true, count: executionCount });
 });
 
-app.get('/', (req, res) => { res.json({ status: 'online', executions: executionCount, lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never', botReady: client.isReady() }); });
+app.get('/', (req, res) => { 
+  res.json({ 
+    status: 'online', 
+    executions: executionCount, 
+    downloads: downloadCount,
+    lastUpdate: lastUpdate > 0 ? new Date(lastUpdate).toISOString() : 'never', 
+    botReady: client.isReady() 
+  }); 
+});
+
 app.listen(config.port, () => console.log(`Server running on port ${config.port}`));
 client.login(config.token);
