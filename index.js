@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes, ChannelType } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -16,11 +16,15 @@ const BLACKLIST_USERS = BLACKLIST_WEBHOOK.filter(w => w !== 'shit' && w !== 'ass
 
 let executionCount = 0, lastUpdate = 0;
 const executionsFile = path.join(__dirname, 'Executions.txt');
+const setupFile = path.join(__dirname, 'Setup.json');
 const webhookTracker = new Map(), webhookCooldown = new Map();
+let setupConfig = {};
 
 const parseExecutions = (name) => { const m = String(name || '').match(/Executions:\s*(\d+)/i); return m ? Number(m[1]) : null; };
 const readFile = () => { try { if (!fs.existsSync(executionsFile)) return null; const n = Number(fs.readFileSync(executionsFile, 'utf8').trim()); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; } catch {} return null; };
 const writeFile = (n) => { try { fs.writeFileSync(executionsFile, String(n)); return true; } catch { return false; } };
+const readSetup = () => { try { if (!fs.existsSync(setupFile)) return {}; return JSON.parse(fs.readFileSync(setupFile, 'utf8')); } catch {} return {}; };
+const writeSetup = (data) => { try { fs.writeFileSync(setupFile, JSON.stringify(data, null, 2)); return true; } catch { return false; } };
 const fetchVC = async (id) => { const c = await client.channels.fetch(id); return c?.isVoiceBased() ? c : null; };
 const renameChannel = async (c, n) => { const p = c.permissionsFor(client.user); if (!p?.has(PermissionFlagsBits.ManageChannels)) return false; await c.setName(n); return true; };
 const hasBlacklist = (t, bl) => { if (!t) return false; const l = t.toLowerCase(); return bl.some(w => l.includes(w)); };
@@ -58,6 +62,8 @@ const bulkDelete = async (c, ids) => {
 
 client.once('ready', async () => {
   console.log(`Bot online as ${client.user.tag}`);
+  setupConfig = readSetup();
+  
   try {
     const c = await fetchVC(config.channelId);
     if (!c) return;
@@ -77,7 +83,9 @@ client.once('ready', async () => {
 
   const commands = [
     new SlashCommandBuilder().setName('mute').setDescription('Timeout a user').addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true)).addStringOption(o => o.setName('duration').setDescription('Duration (e.g., 10s, 5m, 1h, 2d)').setRequired(true)),
-    new SlashCommandBuilder().setName('unmute').setDescription('Remove timeout from a user').addUserOption(o => o.setName('user').setDescription('User to unmute').setRequired(true))
+    new SlashCommandBuilder().setName('unmute').setDescription('Remove timeout from a user').addUserOption(o => o.setName('user').setDescription('User to unmute').setRequired(true)),
+    new SlashCommandBuilder().setName('setup').setDescription('Setup bot features').addStringOption(o => o.setName('feature').setDescription('Feature to setup').setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' })).addChannelOption(o => o.setName('channel').setDescription('Channel for the feature').setRequired(true).addChannelTypes(ChannelType.GuildText)),
+    new SlashCommandBuilder().setName('resetup').setDescription('Remove bot setup').addStringOption(o => o.setName('feature').setDescription('Feature to remove').setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' }))
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -87,7 +95,19 @@ client.once('ready', async () => {
   } catch (e) { console.log(`Command registration failed: ${e.message}`); }
 });
 
-client.on('guildMemberAdd', updateMembers);
+client.on('guildMemberAdd', async (member) => {
+  await updateMembers();
+  
+  if (setupConfig.welcome) {
+    try {
+      const channel = await client.channels.fetch(setupConfig.welcome);
+      if (channel) {
+        await channel.send(`Welcome to **Zenk Studios**, ${member}`);
+      }
+    } catch (e) { console.log(`Welcome message failed: ${e.message}`); }
+  }
+});
+
 client.on('guildMemberRemove', updateMembers);
 
 client.on('messageCreate', async (m) => {
@@ -149,6 +169,23 @@ client.on('interactionCreate', async (i) => {
       if (!member.moderatable) return i.reply({ content: 'Cannot unmute this user', ephemeral: true });
       await member.timeout(null, `Unmuted by ${i.user.tag}`);
       await i.reply({ content: `Unmuted ${user.tag}`, ephemeral: true });
+    } else if (i.commandName === 'setup') {
+      if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
+      const feature = i.options.getString('feature');
+      const channel = i.options.getChannel('channel');
+      setupConfig[feature] = channel.id;
+      writeSetup(setupConfig);
+      await i.reply({ content: `Setup complete: ${feature} → ${channel}`, ephemeral: true });
+    } else if (i.commandName === 'resetup') {
+      if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
+      const feature = i.options.getString('feature');
+      if (setupConfig[feature]) {
+        delete setupConfig[feature];
+        writeSetup(setupConfig);
+        await i.reply({ content: `Removed setup: ${feature}`, ephemeral: true });
+      } else {
+        await i.reply({ content: `No setup found for: ${feature}`, ephemeral: true });
+      }
     }
   } catch (e) { console.log(`Command failed: ${e.message}`); await i.reply({ content: 'Command failed', ephemeral: true }).catch(() => {}); }
 });
