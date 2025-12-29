@@ -76,7 +76,7 @@ const bulkDelete = async (c, ids) => {
   } catch (e) { console.log(`Bulk delete failed: ${e.message}`); }
 };
 
-client.once('ready', () => {
+client.once('ready', async () => {  // ← ASYNC HINZUGEFÜGT
   console.log('Bot is ready');
   setupConfig = readSetup();
   
@@ -93,7 +93,7 @@ client.once('ready', () => {
       executionCount = fromChannel ?? 0;
       writeFile(executionCount);
     }
-    updateMembers();
+    await updateMembers();  // ← AWAIT HINZUGEFÜGT
     setInterval(updateMembers, 600000);
   } catch (e) { console.log(`Ready error: ${e.message}`); }
 
@@ -106,13 +106,13 @@ client.once('ready', () => {
 
   const rest = new REST({ version: '10' }).setToken(config.token);
   try {
-    rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
     console.log('Slash commands registered');
   } catch (e) { console.log(`Command registration failed: ${e.message}`); }
 });
 
 client.on('guildMemberAdd', async (member) => {
-  updateMembers();
+  await updateMembers();
   if (setupConfig.welcome) {
     try {
       const channel = await client.channels.fetch(setupConfig.welcome);
