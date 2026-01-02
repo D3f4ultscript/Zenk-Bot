@@ -311,11 +311,58 @@ client.on('interactionCreate', async (i) => {
           return i.reply({ content: `You already have an active ticket: <#${existingTicketId}>`, ephemeral: true });
         }
 
+        const modal = new ModalBuilder()
+          .setCustomId('ticket-create-modal')
+          .setTitle('Create Support Ticket');
+
+        const executorInput = new TextInputBuilder()
+          .setCustomId('executor-input')
+          .setLabel('Executor')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Bunni, Delta...')
+          .setRequired(true);
+
+        const problemInput = new TextInputBuilder()
+          .setCustomId('problem-input')
+          .setLabel('What is your problem?')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('Please describe your issue in detail...')
+          .setRequired(true);
+
+        const row1 = new ActionRowBuilder().addComponents(executorInput);
+        const row2 = new ActionRowBuilder().addComponents(problemInput);
+
+        modal.addComponents(row1, row2);
+
+        await i.showModal(modal);
+      }
+    } else if (i.isButton()) {
+      if (i.customId === 'close-ticket') {
+        const modal = new ModalBuilder()
+          .setCustomId('close-ticket-modal')
+          .setTitle('Close Ticket');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('close-reason')
+          .setLabel('Reason for closing')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('Please provide a reason...')
+          .setRequired(true);
+
+        const actionRow = new ActionRowBuilder().addComponents(reasonInput);
+        modal.addComponents(actionRow);
+
+        await i.showModal(modal);
+      }
+    } else if (i.isModalSubmit()) {
+      if (i.customId === 'ticket-create-modal') {
+        const executor = i.fields.getTextInputValue('executor-input');
+        const problem = i.fields.getTextInputValue('problem-input');
+
         await i.reply({ content: '⏳ Your ticket is being created...', ephemeral: true });
 
-        const ticketType = i.values[0];
-        const ticketNumber = activeTickets.size + 1;
-        const ticketName = `ticket-${ticketNumber}`;
+        const username = i.user.username.replace(/[^a-zA-Z0-9]/g, '');
+        const ticketName = `support-${username}`;
 
         try {
           const ticketChannel = await i.guild.channels.create({
@@ -340,9 +387,13 @@ client.on('interactionCreate', async (i) => {
 
           activeTickets.set(i.user.id, ticketChannel.id);
 
-          const welcomeEmbed = new EmbedBuilder()
-            .setTitle('Welcome to your ticket!')
-            .setDescription('Please describe your problem in detail so we can help you as best and as quickly as possible.')
+          const ticketEmbed = new EmbedBuilder()
+            .setTitle('🎫 Support Ticket')
+            .addFields(
+              { name: 'User', value: `${i.user}`, inline: true },
+              { name: 'Executor', value: executor, inline: true },
+              { name: 'Problem', value: problem }
+            )
             .setColor('#5865F2')
             .setTimestamp();
 
@@ -355,7 +406,7 @@ client.on('interactionCreate', async (i) => {
 
           const ticketMessage = await ticketChannel.send({
             content: `${i.user}`,
-            embeds: [welcomeEmbed],
+            embeds: [ticketEmbed],
             components: [buttonRow]
           });
 
@@ -366,27 +417,7 @@ client.on('interactionCreate', async (i) => {
           console.log(`Ticket creation failed: ${e.message}`);
           await i.editReply({ content: '❌ Failed to create ticket.', ephemeral: true });
         }
-      }
-    } else if (i.isButton()) {
-      if (i.customId === 'close-ticket') {
-        const modal = new ModalBuilder()
-          .setCustomId('close-ticket-modal')
-          .setTitle('Close Ticket');
-
-        const reasonInput = new TextInputBuilder()
-          .setCustomId('close-reason')
-          .setLabel('Reason for closing')
-          .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder('Please provide a reason...')
-          .setRequired(true);
-
-        const actionRow = new ActionRowBuilder().addComponents(reasonInput);
-        modal.addComponents(actionRow);
-
-        await i.showModal(modal);
-      }
-    } else if (i.isModalSubmit()) {
-      if (i.customId === 'close-ticket-modal') {
+      } else if (i.customId === 'close-ticket-modal') {
         const reason = i.fields.getTextInputValue('close-reason');
         const channel = i.channel;
 
@@ -436,7 +467,7 @@ client.on('interactionCreate', async (i) => {
           } catch (e) {
             console.log(`Could not delete channel: ${e.message}`);
           }
-        }, 3000);
+        }, 5000);
       }
     }
   } catch (e) { console.log(`Interaction failed: ${e.message}`); }
