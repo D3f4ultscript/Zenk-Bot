@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes, ChannelType } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes, ChannelType, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -31,9 +31,11 @@ const setupFile = path.join(__dirname, 'Setup.json');
 
 const webhookTracker = new Map();
 const webhookCooldown = new Map();
+const activeTickets = new Map();
 let setupConfig = {};
 
 const DOWNLOAD_CHANNEL_ID = '1455226125700694027';
+const STAFF_ROLE_ID = '1454608694850486313';
 
 const parseExecutions = (name) => { const m = String(name || '').match(/Executions:\s*(\d+)/i); return m ? Number(m[1]) : null; };
 const readFile = () => { try { if (!fs.existsSync(executionsFile)) return null; const n = Number(fs.readFileSync(executionsFile, 'utf8').trim()); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; } catch {} return null; };
@@ -76,7 +78,7 @@ const bulkDelete = async (c, ids) => {
   } catch (e) { console.log(`Bulk delete failed: ${e.message}`); }
 };
 
-client.once('ready', async () => {  // ← ASYNC HINZUGEFÜGT
+client.once('ready', async () => {
   console.log('Bot is ready');
   setupConfig = readSetup();
   
@@ -93,15 +95,15 @@ client.once('ready', async () => {  // ← ASYNC HINZUGEFÜGT
       executionCount = fromChannel ?? 0;
       writeFile(executionCount);
     }
-    await updateMembers();  // ← AWAIT HINZUGEFÜGT
+    await updateMembers();
     setInterval(updateMembers, 600000);
   } catch (e) { console.log(`Ready error: ${e.message}`); }
 
   const commands = [
     new SlashCommandBuilder().setName('mute').setDescription('Timeout a user').addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true)).addStringOption(o => o.setName('duration').setDescription('Duration (e.g., 10s, 5m, 1h, 2d)').setRequired(true)),
     new SlashCommandBuilder().setName('unmute').setDescription('Remove timeout from a user').addUserOption(o => o.setName('user').setDescription('User to unmute').setRequired(true)),
-    new SlashCommandBuilder().setName('setup').setDescription('Setup bot features').addStringOption(o => o.setName('feature').setDescription('Feature to setup').setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' })).addChannelOption(o => o.setName('channel').setDescription('Channel for the feature').setRequired(true).addChannelTypes(ChannelType.GuildText)),
-    new SlashCommandBuilder().setName('resetup').setDescription('Remove bot setup').addStringOption(o => o.setName('feature').setDescription('Feature to remove').setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' }))
+    new SlashCommandBuilder().setName('setup').setDescription('Setup bot features').addStringOption(o => o.setName('feature').setDescription('Feature to setup').setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' }, { name: 'Tickets', value: 'tickets' })).addChannelOption(o => o.setName('channel').setDescription('Channel for the feature').setRequired(true).addChannelTypes(ChannelType.GuildText)),
+    new SlashCommandBuilder().setName('resetup').setDescription('Remove bot setup').addStringOption(o => o.setName('feature').setDescription('Feature to remove').setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' }, { name: 'Tickets', value: 'tickets' }))
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -161,44 +163,233 @@ client.on('webhookUpdate', async (c) => {
 });
 
 client.on('interactionCreate', async (i) => {
-  if (!i.isChatInputCommand()) return;
   try {
-    if (i.commandName === 'mute') {
-      if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return i.reply({ content: 'No permissions', ephemeral: true });
-      const user = i.options.getUser('user');
-      const duration = i.options.getString('duration');
-      const ms = parseDuration(duration);
-      if (!ms || ms > 2419200000) return i.reply({ content: 'Invalid duration (max 28d)', ephemeral: true });
-      const member = await i.guild.members.fetch(user.id);
-      if (!member.moderatable) return i.reply({ content: 'Cannot timeout this user', ephemeral: true });
-      await member.timeout(ms, `Timed out by ${i.user.tag}`);
-      await i.reply({ content: `Timed out ${user.tag} for ${duration}`, ephemeral: true });
-    } else if (i.commandName === 'unmute') {
-      if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return i.reply({ content: 'No permissions', ephemeral: true });
-      const user = i.options.getUser('user');
-      const member = await i.guild.members.fetch(user.id);
-      if (!member.moderatable) return i.reply({ content: 'Cannot unmute this user', ephemeral: true });
-      await member.timeout(null, `Unmuted by ${i.user.tag}`);
-      await i.reply({ content: `Unmuted ${user.tag}`, ephemeral: true });
-    } else if (i.commandName === 'setup') {
-      if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
-      const feature = i.options.getString('feature');
-      const channel = i.options.getChannel('channel');
-      setupConfig[feature] = channel.id;
-      writeSetup(setupConfig);
-      await i.reply({ content: `Setup complete: ${feature} → ${channel}`, ephemeral: true });
-    } else if (i.commandName === 'resetup') {
-      if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
-      const feature = i.options.getString('feature');
-      if (setupConfig[feature]) {
-        delete setupConfig[feature];
-        writeSetup(setupConfig);
-        await i.reply({ content: `Removed setup: ${feature}`, ephemeral: true });
-      } else {
-        await i.reply({ content: `No setup found for: ${feature}`, ephemeral: true });
+    if (i.isChatInputCommand()) {
+      if (i.commandName === 'mute') {
+        if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return i.reply({ content: 'No permissions', ephemeral: true });
+        const user = i.options.getUser('user');
+        const duration = i.options.getString('duration');
+        const ms = parseDuration(duration);
+        if (!ms || ms > 2419200000) return i.reply({ content: 'Invalid duration (max 28d)', ephemeral: true });
+        const member = await i.guild.members.fetch(user.id);
+        if (!member.moderatable) return i.reply({ content: 'Cannot timeout this user', ephemeral: true });
+        await member.timeout(ms, `Timed out by ${i.user.tag}`);
+        await i.reply({ content: `Timed out ${user.tag} for ${duration}`, ephemeral: true });
+      } else if (i.commandName === 'unmute') {
+        if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return i.reply({ content: 'No permissions', ephemeral: true });
+        const user = i.options.getUser('user');
+        const member = await i.guild.members.fetch(user.id);
+        if (!member.moderatable) return i.reply({ content: 'Cannot unmute this user', ephemeral: true });
+        await member.timeout(null, `Unmuted by ${i.user.tag}`);
+        await i.reply({ content: `Unmuted ${user.tag}`, ephemeral: true });
+      } else if (i.commandName === 'setup') {
+        if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
+        const feature = i.options.getString('feature');
+        const channel = i.options.getChannel('channel');
+        
+        if (feature === 'tickets') {
+          let ticketCategory = i.guild.channels.cache.find(c => c.name === '</> Tickets </>' && c.type === ChannelType.GuildCategory);
+          
+          if (!ticketCategory) {
+            ticketCategory = await i.guild.channels.create({
+              name: '</> Tickets </>',
+              type: ChannelType.GuildCategory,
+              permissionOverwrites: [
+                {
+                  id: i.guild.id,
+                  deny: [PermissionFlagsBits.ViewChannel]
+                },
+                {
+                  id: STAFF_ROLE_ID,
+                  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels]
+                }
+              ]
+            });
+          }
+
+          let ticketLogsChannel = i.guild.channels.cache.find(c => c.name === 'ticket-logs' && c.type === ChannelType.GuildText);
+          if (!ticketLogsChannel) {
+            ticketLogsChannel = await i.guild.channels.create({
+              name: 'ticket-logs',
+              type: ChannelType.GuildText,
+              permissionOverwrites: [
+                {
+                  id: i.guild.id,
+                  deny: [PermissionFlagsBits.ViewChannel]
+                },
+                {
+                  id: STAFF_ROLE_ID,
+                  allow: [PermissionFlagsBits.ViewChannel]
+                }
+              ]
+            });
+          }
+
+          const selectMenu = new StringSelectMenuBuilder()
+            .setCustomId('ticket-select')
+            .setPlaceholder('Wähle eine Ticket-Art aus')
+            .setMinValues(1)
+            .setMaxValues(1)
+            .addOptions(
+              new StringSelectMenuOptionBuilder()
+                .setLabel('Support')
+                .setValue('support')
+                .setDescription('Für Bug Reports oder Hilfe bei Fragen')
+            );
+
+          const row = new ActionRowBuilder().addComponents(selectMenu);
+
+          await channel.send({
+            content: '**🎫 Ticket System**\n\nBei Problemen oder Fragen kannst du hier ein Ticket öffnen. Wähle einfach die passende Kategorie aus dem Dropdown-Menü unten aus, und ein privater Support-Channel wird für dich erstellt.',
+            components: [row]
+          });
+
+          setupConfig[feature] = channel.id;
+          setupConfig.ticketCategory = ticketCategory.id;
+          setupConfig.ticketLogs = ticketLogsChannel.id;
+          writeSetup(setupConfig);
+
+          await i.reply({ content: `Setup complete: ${feature} → ${channel}\nKategorie und Logs wurden erstellt!`, ephemeral: true });
+        } else {
+          setupConfig[feature] = channel.id;
+          writeSetup(setupConfig);
+          await i.reply({ content: `Setup complete: ${feature} → ${channel}`, ephemeral: true });
+        }
+      } else if (i.commandName === 'resetup') {
+        if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
+        const feature = i.options.getString('feature');
+        if (setupConfig[feature]) {
+          delete setupConfig[feature];
+          if (feature === 'tickets') {
+            delete setupConfig.ticketCategory;
+            delete setupConfig.ticketLogs;
+          }
+          writeSetup(setupConfig);
+          await i.reply({ content: `Removed setup: ${feature}`, ephemeral: true });
+        } else {
+          await i.reply({ content: `No setup found for: ${feature}`, ephemeral: true });
+        }
+      }
+    } else if (i.isStringSelectMenu()) {
+      if (i.customId === 'ticket-select') {
+        if (activeTickets.has(i.user.id)) {
+          const existingTicketId = activeTickets.get(i.user.id);
+          return i.reply({ content: `Du hast bereits ein aktives Ticket: <#${existingTicketId}>`, ephemeral: true });
+        }
+
+        await i.reply({ content: '⏳ Dein Ticket wird erstellt...', ephemeral: true });
+
+        const ticketType = i.values[0];
+        const ticketNumber = activeTickets.size + 1;
+        const ticketName = `ticket-${ticketNumber}`;
+
+        try {
+          const ticketChannel = await i.guild.channels.create({
+            name: ticketName,
+            type: ChannelType.GuildText,
+            parent: setupConfig.ticketCategory,
+            permissionOverwrites: [
+              {
+                id: i.guild.id,
+                deny: [PermissionFlagsBits.ViewChannel]
+              },
+              {
+                id: i.user.id,
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
+              },
+              {
+                id: STAFF_ROLE_ID,
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
+              }
+            ]
+          });
+
+          activeTickets.set(i.user.id, ticketChannel.id);
+
+          const closeButton = new ButtonBuilder()
+            .setCustomId('close-ticket')
+            .setLabel('Close')
+            .setStyle(ButtonStyle.Danger);
+
+          const buttonRow = new ActionRowBuilder().addComponents(closeButton);
+
+          await ticketChannel.send({
+            content: `${i.user}, willkommen in deinem Ticket!\n\nBitte beschreibe dein Problem ausführlich, damit wir dir am besten und schnellsten helfen können.`,
+            components: [buttonRow]
+          });
+
+          await i.editReply({ content: `✅ Dein Ticket wurde erstellt: ${ticketChannel}`, ephemeral: true });
+        } catch (e) {
+          console.log(`Ticket creation failed: ${e.message}`);
+          await i.editReply({ content: '❌ Fehler beim Erstellen des Tickets.', ephemeral: true });
+        }
+      }
+    } else if (i.isButton()) {
+      if (i.customId === 'close-ticket') {
+        const modal = new ModalBuilder()
+          .setCustomId('close-ticket-modal')
+          .setTitle('Ticket schließen');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('close-reason')
+          .setLabel('Grund für das Schließen')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('Bitte gib den Grund an...')
+          .setRequired(true);
+
+        const actionRow = new ActionRowBuilder().addComponents(reasonInput);
+        modal.addComponents(actionRow);
+
+        await i.showModal(modal);
+      }
+    } else if (i.isModalSubmit()) {
+      if (i.customId === 'close-ticket-modal') {
+        const reason = i.fields.getTextInputValue('close-reason');
+        const channel = i.channel;
+
+        const ticketUser = Array.from(activeTickets.entries()).find(([userId, channelId]) => channelId === channel.id);
+        
+        if (!ticketUser) {
+          return i.reply({ content: 'Ticket-Benutzer nicht gefunden.', ephemeral: true });
+        }
+
+        const [userId] = ticketUser;
+        activeTickets.delete(userId);
+
+        await i.reply({ content: `✅ Ticket wird geschlossen...`, ephemeral: true });
+
+        const user = await client.users.fetch(userId);
+        try {
+          await user.send(`Dein Ticket **${channel.name}** wurde geschlossen.\n\n**Grund:** ${reason}`);
+        } catch (e) {
+          console.log(`Could not DM user: ${e.message}`);
+        }
+
+        if (setupConfig.ticketLogs) {
+          const logsChannel = await client.channels.fetch(setupConfig.ticketLogs);
+          const logEmbed = new EmbedBuilder()
+            .setTitle(`📋 Ticket geschlossen: ${channel.name}`)
+            .addFields(
+              { name: 'Ticket-Nutzer', value: `<@${userId}>`, inline: true },
+              { name: 'Geschlossen von', value: `<@${i.user.id}>`, inline: true },
+              { name: 'Grund', value: reason }
+            )
+            .setColor('#ff0000')
+            .setTimestamp();
+
+          await logsChannel.send({ embeds: [logEmbed] });
+        }
+
+        setTimeout(async () => {
+          try {
+            await channel.delete();
+          } catch (e) {
+            console.log(`Could not delete channel: ${e.message}`);
+          }
+        }, 3000);
       }
     }
-  } catch (e) { console.log(`Command failed: ${e.message}`); await i.reply({ content: 'Command failed', ephemeral: true }).catch(() => {}); }
+  } catch (e) { console.log(`Interaction failed: ${e.message}`); }
 });
 
 app.post('/track', async (req, res) => {
