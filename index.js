@@ -239,6 +239,10 @@ client.on('interactionCreate', async (i) => {
             .setMaxValues(1)
             .addOptions(
               new StringSelectMenuOptionBuilder()
+                .setLabel('None')
+                .setValue('none')
+                .setDescription('Deselect'),
+              new StringSelectMenuOptionBuilder()
                 .setLabel('Support')
                 .setValue('support')
                 .setDescription('For bug reports or help with questions')
@@ -306,6 +310,12 @@ client.on('interactionCreate', async (i) => {
       }
     } else if (i.isStringSelectMenu()) {
       if (i.customId === 'ticket-select') {
+        const selectedValue = i.values[0];
+
+        if (selectedValue === 'none') {
+          return i.reply({ content: 'Selection cleared.', ephemeral: true });
+        }
+
         if (activeTickets.has(i.user.id)) {
           const existingTicketId = activeTickets.get(i.user.id);
           return i.reply({ content: `You already have an active ticket: <#${existingTicketId}>`, ephemeral: true });
