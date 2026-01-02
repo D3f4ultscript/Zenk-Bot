@@ -212,6 +212,7 @@ client.on('interactionCreate', async (i) => {
             ticketLogsChannel = await i.guild.channels.create({
               name: 'ticket-logs',
               type: ChannelType.GuildText,
+              parent: channel.parent,
               permissionOverwrites: [
                 {
                   id: i.guild.id,
@@ -219,28 +220,34 @@ client.on('interactionCreate', async (i) => {
                 },
                 {
                   id: STAFF_ROLE_ID,
-                  allow: [PermissionFlagsBits.ViewChannel]
+                  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
                 }
               ]
             });
           }
 
+          const ticketEmbed = new EmbedBuilder()
+            .setTitle('🎫 Ticket System')
+            .setDescription('If you have any problems or questions, you can open a ticket here. Simply select the appropriate category from the dropdown menu below, and a private support channel will be created for you.')
+            .setColor('#5865F2')
+            .setTimestamp();
+
           const selectMenu = new StringSelectMenuBuilder()
             .setCustomId('ticket-select')
-            .setPlaceholder('Wähle eine Ticket-Art aus')
+            .setPlaceholder('Select a ticket type')
             .setMinValues(1)
             .setMaxValues(1)
             .addOptions(
               new StringSelectMenuOptionBuilder()
                 .setLabel('Support')
                 .setValue('support')
-                .setDescription('Für Bug Reports oder Hilfe bei Fragen')
+                .setDescription('For bug reports or help with questions')
             );
 
           const row = new ActionRowBuilder().addComponents(selectMenu);
 
           await channel.send({
-            content: '**🎫 Ticket System**\n\nBei Problemen oder Fragen kannst du hier ein Ticket öffnen. Wähle einfach die passende Kategorie aus dem Dropdown-Menü unten aus, und ein privater Support-Channel wird für dich erstellt.',
+            embeds: [ticketEmbed],
             components: [row]
           });
 
@@ -249,7 +256,7 @@ client.on('interactionCreate', async (i) => {
           setupConfig.ticketLogs = ticketLogsChannel.id;
           writeSetup(setupConfig);
 
-          await i.reply({ content: `Setup complete: ${feature} → ${channel}\nKategorie und Logs wurden erstellt!`, ephemeral: true });
+          await i.reply({ content: `Setup complete: ${feature} → ${channel}\nCategory and logs channel created!`, ephemeral: true });
         } else {
           setupConfig[feature] = channel.id;
           writeSetup(setupConfig);
@@ -258,12 +265,39 @@ client.on('interactionCreate', async (i) => {
       } else if (i.commandName === 'resetup') {
         if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
         const feature = i.options.getString('feature');
-        if (setupConfig[feature]) {
-          delete setupConfig[feature];
-          if (feature === 'tickets') {
+        
+        if (feature === 'tickets' && setupConfig[feature]) {
+          try {
+            if (setupConfig.ticketCategory) {
+              const category = await i.guild.channels.fetch(setupConfig.ticketCategory).catch(() => null);
+              if (category) {
+                const channelsInCategory = i.guild.channels.cache.filter(c => c.parentId === category.id);
+                for (const [id, channel] of channelsInCategory) {
+                  await channel.delete().catch(e => console.log(`Could not delete channel: ${e.message}`));
+                }
+                await category.delete().catch(e => console.log(`Could not delete category: ${e.message}`));
+              }
+            }
+
+            if (setupConfig.ticketLogs) {
+              const logsChannel = await i.guild.channels.fetch(setupConfig.ticketLogs).catch(() => null);
+              if (logsChannel) await logsChannel.delete().catch(e => console.log(`Could not delete logs channel: ${e.message}`));
+            }
+
+            activeTickets.clear();
+
+            delete setupConfig[feature];
             delete setupConfig.ticketCategory;
             delete setupConfig.ticketLogs;
+            writeSetup(setupConfig);
+
+            await i.reply({ content: `Removed setup: ${feature}\nAll ticket channels, category, and logs have been deleted.`, ephemeral: true });
+          } catch (e) {
+            console.log(`Resetup failed: ${e.message}`);
+            await i.reply({ content: 'Failed to remove ticket setup completely.', ephemeral: true });
           }
+        } else if (setupConfig[feature]) {
+          delete setupConfig[feature];
           writeSetup(setupConfig);
           await i.reply({ content: `Removed setup: ${feature}`, ephemeral: true });
         } else {
@@ -274,10 +308,10 @@ client.on('interactionCreate', async (i) => {
       if (i.customId === 'ticket-select') {
         if (activeTickets.has(i.user.id)) {
           const existingTicketId = activeTickets.get(i.user.id);
-          return i.reply({ content: `Du hast bereits ein aktives Ticket: <#${existingTicketId}>`, ephemeral: true });
+          return i.reply({ content: `You already have an active ticket: <#${existingTicketId}>`, ephemeral: true });
         }
 
-        await i.reply({ content: '⏳ Dein Ticket wird erstellt...', ephemeral: true });
+        await i.reply({ content: '⏳ Your ticket is being created...', ephemeral: true });
 
         const ticketType = i.values[0];
         const ticketNumber = activeTickets.size + 1;
@@ -306,6 +340,12 @@ client.on('interactionCreate', async (i) => {
 
           activeTickets.set(i.user.id, ticketChannel.id);
 
+          const welcomeEmbed = new EmbedBuilder()
+            .setTitle('Welcome to your ticket!')
+            .setDescription('Please describe your problem in detail so we can help you as best and as quickly as possible.')
+            .setColor('#5865F2')
+            .setTimestamp();
+
           const closeButton = new ButtonBuilder()
             .setCustomId('close-ticket')
             .setLabel('Close')
@@ -313,28 +353,31 @@ client.on('interactionCreate', async (i) => {
 
           const buttonRow = new ActionRowBuilder().addComponents(closeButton);
 
-          await ticketChannel.send({
-            content: `${i.user}, willkommen in deinem Ticket!\n\nBitte beschreibe dein Problem ausführlich, damit wir dir am besten und schnellsten helfen können.`,
+          const ticketMessage = await ticketChannel.send({
+            content: `${i.user}`,
+            embeds: [welcomeEmbed],
             components: [buttonRow]
           });
 
-          await i.editReply({ content: `✅ Dein Ticket wurde erstellt: ${ticketChannel}`, ephemeral: true });
+          await ticketMessage.pin();
+
+          await i.editReply({ content: `✅ Your ticket has been created: ${ticketChannel}`, ephemeral: true });
         } catch (e) {
           console.log(`Ticket creation failed: ${e.message}`);
-          await i.editReply({ content: '❌ Fehler beim Erstellen des Tickets.', ephemeral: true });
+          await i.editReply({ content: '❌ Failed to create ticket.', ephemeral: true });
         }
       }
     } else if (i.isButton()) {
       if (i.customId === 'close-ticket') {
         const modal = new ModalBuilder()
           .setCustomId('close-ticket-modal')
-          .setTitle('Ticket schließen');
+          .setTitle('Close Ticket');
 
         const reasonInput = new TextInputBuilder()
           .setCustomId('close-reason')
-          .setLabel('Grund für das Schließen')
+          .setLabel('Reason for closing')
           .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder('Bitte gib den Grund an...')
+          .setPlaceholder('Please provide a reason...')
           .setRequired(true);
 
         const actionRow = new ActionRowBuilder().addComponents(reasonInput);
@@ -350,17 +393,24 @@ client.on('interactionCreate', async (i) => {
         const ticketUser = Array.from(activeTickets.entries()).find(([userId, channelId]) => channelId === channel.id);
         
         if (!ticketUser) {
-          return i.reply({ content: 'Ticket-Benutzer nicht gefunden.', ephemeral: true });
+          return i.reply({ content: 'Ticket user not found.', ephemeral: true });
         }
 
         const [userId] = ticketUser;
         activeTickets.delete(userId);
 
-        await i.reply({ content: `✅ Ticket wird geschlossen...`, ephemeral: true });
+        await i.reply({ content: `✅ Ticket is being closed...`, ephemeral: true });
 
         const user = await client.users.fetch(userId);
         try {
-          await user.send(`Dein Ticket **${channel.name}** wurde geschlossen.\n\n**Grund:** ${reason}`);
+          const closeDMEmbed = new EmbedBuilder()
+            .setTitle('🎫 Ticket Closed')
+            .setDescription(`Your ticket **${channel.name}** has been closed.`)
+            .addFields({ name: 'Reason', value: reason })
+            .setColor('#ff0000')
+            .setTimestamp();
+
+          await user.send({ embeds: [closeDMEmbed] });
         } catch (e) {
           console.log(`Could not DM user: ${e.message}`);
         }
@@ -368,11 +418,11 @@ client.on('interactionCreate', async (i) => {
         if (setupConfig.ticketLogs) {
           const logsChannel = await client.channels.fetch(setupConfig.ticketLogs);
           const logEmbed = new EmbedBuilder()
-            .setTitle(`📋 Ticket geschlossen: ${channel.name}`)
+            .setTitle(`📋 Ticket Closed: ${channel.name}`)
             .addFields(
-              { name: 'Ticket-Nutzer', value: `<@${userId}>`, inline: true },
-              { name: 'Geschlossen von', value: `<@${i.user.id}>`, inline: true },
-              { name: 'Grund', value: reason }
+              { name: 'Ticket User', value: `<@${userId}>`, inline: true },
+              { name: 'Closed By', value: `<@${i.user.id}>`, inline: true },
+              { name: 'Reason', value: reason }
             )
             .setColor('#ff0000')
             .setTimestamp();
