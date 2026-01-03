@@ -36,6 +36,14 @@ let setupConfig = {};
 
 const DOWNLOAD_CHANNEL_ID = '1455226125700694027';
 const STAFF_ROLE_ID = '1454608694850486313';
+const LOG_CHANNEL_ID = '1456977089864400970';
+
+const sendLog = async (embed) => {
+  try {
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
+    if (logChannel) await logChannel.send({ embeds: [embed] });
+  } catch (e) { console.log(`Log send failed: ${e.message}`); }
+};
 
 const parseExecutions = (name) => { const m = String(name || '').match(/Executions:\s*(\d+)/i); return m ? Number(m[1]) : null; };
 const readFile = () => { try { if (!fs.existsSync(executionsFile)) return null; const n = Number(fs.readFileSync(executionsFile, 'utf8').trim()); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; } catch {} return null; };
@@ -134,8 +142,44 @@ client.on('messageCreate', async (m) => {
         if (now < webhookCooldown.get(wId)) { await m.delete(); return; }
         else { webhookCooldown.delete(wId); webhookTracker.delete(wId); }
       }
-      if (m.author.username !== 'Zenk') { await m.delete(); await restoreWebhook(wId, m.channelId); return; }
-      if (checkMsg(m, BLACKLIST_WEBHOOK)) { await m.delete(); return; }
+      if (m.author.username !== 'Zenk') {
+        await m.delete();
+        await restoreWebhook(wId, m.channelId);
+        
+        const logEmbed = new EmbedBuilder()
+          .setTitle('⚠️ Webhook Name Violation')
+          .setDescription('A webhook with an incorrect name attempted to send a message')
+          .addFields(
+            { name: 'Webhook Name', value: m.author.username, inline: true },
+            { name: 'Webhook ID', value: wId, inline: true },
+            { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false },
+            { name: 'Action Taken', value: 'Message deleted & webhook name restored to "Zenk"', inline: false }
+          )
+          .setColor('#ff0000')
+          .setTimestamp();
+        
+        await sendLog(logEmbed);
+        return;
+      }
+      if (checkMsg(m, BLACKLIST_WEBHOOK)) {
+        await m.delete();
+        
+        const logEmbed = new EmbedBuilder()
+          .setTitle('🚫 Webhook Blacklist Detection')
+          .setDescription('A webhook message contained blacklisted words')
+          .addFields(
+            { name: 'Webhook Name', value: m.author.username, inline: true },
+            { name: 'Webhook ID', value: wId, inline: true },
+            { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false },
+            { name: 'Message Content', value: m.content.length > 0 ? m.content.substring(0, 1024) : 'No content', inline: false },
+            { name: 'Action Taken', value: 'Message deleted', inline: false }
+          )
+          .setColor('#ff0000')
+          .setTimestamp();
+        
+        await sendLog(logEmbed);
+        return;
+      }
       if (!webhookTracker.has(wId)) webhookTracker.set(wId, []);
       const msgs = webhookTracker.get(wId);
       msgs.push({ timestamp: now, messageId: m.id });
@@ -145,11 +189,46 @@ client.on('messageCreate', async (m) => {
         await bulkDelete(m.channel, recent.map(msg => msg.messageId));
         webhookCooldown.set(wId, now + 30000);
         webhookTracker.set(wId, []);
+        
+        const logEmbed = new EmbedBuilder()
+          .setTitle('⚡ Webhook Rate Limit Triggered')
+          .setDescription('A webhook exceeded the rate limit (10 messages in 8 seconds)')
+          .addFields(
+            { name: 'Webhook Name', value: m.author.username, inline: true },
+            { name: 'Webhook ID', value: wId, inline: true },
+            { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false },
+            { name: 'Messages Deleted', value: `${recent.length} messages`, inline: true },
+            { name: 'Cooldown', value: '30 seconds', inline: true }
+          )
+          .setColor('#ffa500')
+          .setTimestamp();
+        
+        await sendLog(logEmbed);
       }
     } else {
       if (checkMsg(m, BLACKLIST_USERS)) {
         await m.delete();
-        if (m.member?.moderatable) try { await m.member.timeout(600000, 'Blacklisted word'); } catch (e) { console.log(`Timeout failed: ${e.message}`); }
+        if (m.member?.moderatable) {
+          try {
+            await m.member.timeout(600000, 'Blacklisted word');
+            
+            const logEmbed = new EmbedBuilder()
+              .setTitle('🚫 User Blacklist Detection')
+              .setDescription('A user message contained blacklisted words')
+              .addFields(
+                { name: 'User', value: `${m.author.tag} (${m.author.id})`, inline: false },
+                { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false },
+                { name: 'Message Content', value: m.content.length > 0 ? m.content.substring(0, 1024) : 'No content', inline: false },
+                { name: 'Action Taken', value: 'Message deleted & user timed out for 10 minutes', inline: false }
+              )
+              .setColor('#ff0000')
+              .setTimestamp();
+            
+            await sendLog(logEmbed);
+          } catch (e) {
+            console.log(`Timeout failed: ${e.message}`);
+          }
+        }
       }
     }
   } catch (e) { console.log(`Message check failed: ${e.message}`); }
@@ -175,6 +254,19 @@ client.on('interactionCreate', async (i) => {
         if (!member.moderatable) return i.reply({ content: 'Cannot timeout this user', ephemeral: true });
         await member.timeout(ms, `Timed out by ${i.user.tag}`);
         await i.reply({ content: `Timed out ${user.tag} for ${duration}`, ephemeral: true });
+        
+        const logEmbed = new EmbedBuilder()
+          .setTitle('⏱️ User Timed Out')
+          .addFields(
+            { name: 'User', value: `${user.tag} (${user.id})`, inline: true },
+            { name: 'Duration', value: duration, inline: true },
+            { name: 'Moderator', value: `${i.user.tag} (${i.user.id})`, inline: false },
+            { name: 'Channel', value: `${i.channel} (${i.channel.name})`, inline: false }
+          )
+          .setColor('#ffa500')
+          .setTimestamp();
+        
+        await sendLog(logEmbed);
       } else if (i.commandName === 'unmute') {
         if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return i.reply({ content: 'No permissions', ephemeral: true });
         const user = i.options.getUser('user');
@@ -182,6 +274,18 @@ client.on('interactionCreate', async (i) => {
         if (!member.moderatable) return i.reply({ content: 'Cannot unmute this user', ephemeral: true });
         await member.timeout(null, `Unmuted by ${i.user.tag}`);
         await i.reply({ content: `Unmuted ${user.tag}`, ephemeral: true });
+        
+        const logEmbed = new EmbedBuilder()
+          .setTitle('✅ User Timeout Removed')
+          .addFields(
+            { name: 'User', value: `${user.tag} (${user.id})`, inline: true },
+            { name: 'Moderator', value: `${i.user.tag} (${i.user.id})`, inline: true },
+            { name: 'Channel', value: `${i.channel} (${i.channel.name})`, inline: false }
+          )
+          .setColor('#00ff00')
+          .setTimestamp();
+        
+        await sendLog(logEmbed);
       } else if (i.commandName === 'setup') {
         if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
         const feature = i.options.getString('feature');
@@ -261,10 +365,34 @@ client.on('interactionCreate', async (i) => {
           writeSetup(setupConfig);
 
           await i.reply({ content: `Setup complete: ${feature} → ${channel}\nCategory and logs channel created!`, ephemeral: true });
+          
+          const logEmbed = new EmbedBuilder()
+            .setTitle('⚙️ Ticket System Setup')
+            .addFields(
+              { name: 'Feature', value: feature, inline: true },
+              { name: 'Channel', value: `${channel} (${channel.name})`, inline: true },
+              { name: 'Administrator', value: `${i.user.tag} (${i.user.id})`, inline: false }
+            )
+            .setColor('#5865F2')
+            .setTimestamp();
+          
+          await sendLog(logEmbed);
         } else {
           setupConfig[feature] = channel.id;
           writeSetup(setupConfig);
           await i.reply({ content: `Setup complete: ${feature} → ${channel}`, ephemeral: true });
+          
+          const logEmbed = new EmbedBuilder()
+            .setTitle('⚙️ Feature Setup')
+            .addFields(
+              { name: 'Feature', value: feature, inline: true },
+              { name: 'Channel', value: `${channel} (${channel.name})`, inline: true },
+              { name: 'Administrator', value: `${i.user.tag} (${i.user.id})`, inline: false }
+            )
+            .setColor('#5865F2')
+            .setTimestamp();
+          
+          await sendLog(logEmbed);
         }
       } else if (i.commandName === 'resetup') {
         if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
@@ -296,6 +424,18 @@ client.on('interactionCreate', async (i) => {
             writeSetup(setupConfig);
 
             await i.reply({ content: `Removed setup: ${feature}\nAll ticket channels, category, and logs have been deleted.`, ephemeral: true });
+            
+            const logEmbed = new EmbedBuilder()
+              .setTitle('🗑️ Ticket System Removed')
+              .addFields(
+                { name: 'Feature', value: feature, inline: true },
+                { name: 'Administrator', value: `${i.user.tag} (${i.user.id})`, inline: true },
+                { name: 'Action', value: 'All ticket channels, category, and logs deleted', inline: false }
+              )
+              .setColor('#ff0000')
+              .setTimestamp();
+            
+            await sendLog(logEmbed);
           } catch (e) {
             console.log(`Resetup failed: ${e.message}`);
             await i.reply({ content: 'Failed to remove ticket setup completely.', ephemeral: true });
@@ -304,6 +444,17 @@ client.on('interactionCreate', async (i) => {
           delete setupConfig[feature];
           writeSetup(setupConfig);
           await i.reply({ content: `Removed setup: ${feature}`, ephemeral: true });
+          
+          const logEmbed = new EmbedBuilder()
+            .setTitle('🗑️ Feature Setup Removed')
+            .addFields(
+              { name: 'Feature', value: feature, inline: true },
+              { name: 'Administrator', value: `${i.user.tag} (${i.user.id})`, inline: true }
+            )
+            .setColor('#ff0000')
+            .setTimestamp();
+          
+          await sendLog(logEmbed);
         } else {
           await i.reply({ content: `No setup found for: ${feature}`, ephemeral: true });
         }
@@ -423,6 +574,19 @@ client.on('interactionCreate', async (i) => {
           await ticketMessage.pin();
 
           await i.editReply({ content: `✅ Your ticket has been created: ${ticketChannel}`, ephemeral: true });
+          
+          const logEmbed = new EmbedBuilder()
+            .setTitle('🎫 Ticket Created')
+            .addFields(
+              { name: 'User', value: `${i.user.tag} (${i.user.id})`, inline: false },
+              { name: 'Ticket Channel', value: `${ticketChannel} (${ticketChannel.name})`, inline: false },
+              { name: 'Executor', value: executor, inline: true },
+              { name: 'Problem', value: problem.substring(0, 1024), inline: false }
+            )
+            .setColor('#5865F2')
+            .setTimestamp();
+          
+          await sendLog(logEmbed);
         } catch (e) {
           console.log(`Ticket creation failed: ${e.message}`);
           await i.editReply({ content: '❌ Failed to create ticket.', ephemeral: true });
@@ -470,6 +634,19 @@ client.on('interactionCreate', async (i) => {
 
           await logsChannel.send({ embeds: [logEmbed] });
         }
+
+        const mainLogEmbed = new EmbedBuilder()
+          .setTitle('🎫 Ticket Closed')
+          .addFields(
+            { name: 'Ticket Channel', value: channel.name, inline: true },
+            { name: 'User', value: `${user.tag} (${userId})`, inline: true },
+            { name: 'Closed By', value: `${i.user.tag} (${i.user.id})`, inline: false },
+            { name: 'Reason', value: reason, inline: false }
+          )
+          .setColor('#ff0000')
+          .setTimestamp();
+        
+        await sendLog(mainLogEmbed);
 
         setTimeout(async () => {
           try {
