@@ -17,7 +17,14 @@ const client = new Client({
 
 const app = express();
 app.use(express.json());
-app.use(express.raw({ type: '*/*' }));
+app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
 
 const BLACKLIST_WEBHOOK = ['fuck', 'shit', 'bitch', 'asshole', 'bastard', 'damn', 'cunt', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'prick', 'twat', 'wanker', 'bollocks', 'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'schwuchtel', 'schwul', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'kacke', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich'];
 const BLACKLIST_USERS = BLACKLIST_WEBHOOK.filter(w => w !== 'shit' && w !== 'ass');
@@ -662,32 +669,48 @@ client.on('interactionCreate', async (i) => {
 });
 
 app.post('/rating', async (req, res) => {
+  console.log('Rating request received:', req.body);
+  
   try {
+    if (!client.isReady()) {
+      console.log('Bot not ready yet');
+      return res.status(503).json({ success: false, error: 'Bot is not ready yet' });
+    }
+
     const { message, stars, timestamp } = req.body;
     
     if (!message || !stars || !timestamp) {
-      return res.status(400).json({ success: false, error: 'Missing required fields' });
+      console.log('Missing fields:', { message: !!message, stars: !!stars, timestamp: !!timestamp });
+      return res.status(400).json({ success: false, error: 'Missing required fields: message, stars, timestamp' });
     }
 
-    if (stars < 1 || stars > 5) {
-      return res.status(400).json({ success: false, error: 'Stars must be between 1 and 5' });
+    const starsNum = Number(stars);
+    if (isNaN(starsNum) || starsNum < 1 || starsNum > 5) {
+      console.log('Invalid stars value:', stars);
+      return res.status(400).json({ success: false, error: 'Stars must be a number between 1 and 5' });
     }
 
-    const starEmojis = '⭐'.repeat(stars);
+    const starEmojis = '⭐'.repeat(starsNum);
     
     const embed = new EmbedBuilder()
       .setTitle('⭐ New Rating')
-      .setDescription(message)
+      .setDescription(String(message))
       .setColor(3447003)
       .addFields({ name: 'Rating', value: starEmojis, inline: true })
       .setTimestamp(new Date(timestamp));
     
     const channel = await client.channels.fetch(RATING_CHANNEL_ID);
+    if (!channel) {
+      console.log('Rating channel not found');
+      return res.status(404).json({ success: false, error: 'Rating channel not found' });
+    }
+
     await channel.send({ embeds: [embed] });
+    console.log('Rating sent successfully');
     
-    res.status(200).json({ success: true });
+    res.status(200).json({ success: true, message: 'Rating submitted successfully' });
   } catch (error) {
-    console.log(`Rating submission failed: ${error.message}`);
+    console.error('Rating submission error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -737,7 +760,7 @@ app.post('/import', async (req, res) => {
   writeFile(executionCount);
   try {
     const c = await fetchVC(config.channelId);
-    if (c) { await renameChannel(c, `Executions: ${executionCount}`); lastUpdate = Date.now(); }
+    if (c) { await renameChannel(c, `Executions: ${executionCount}`); lastUpdate = now; }
   } catch {}
   res.json({ success: true, count: executionCount });
 });
@@ -749,6 +772,7 @@ app.get('/', (req, res) => {
 const port = config.port || 3000;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  console.log(`Rating endpoint: http://localhost:${port}/rating`);
 });
 
 client.login(config.token);
