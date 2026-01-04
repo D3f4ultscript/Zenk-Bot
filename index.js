@@ -44,7 +44,7 @@ let setupConfig = {};
 const DOWNLOAD_CHANNEL_ID = '1455226125700694027';
 const STAFF_ROLE_ID = '1454608694850486313';
 const LOG_CHANNEL_ID = '1456977089864400970';
-const RATING_CHANNEL_ID = '1456977089864400970';
+const RATING_CHANNEL_ID = '1454624341248708649';
 
 const sendLog = async (embed) => {
   try {
@@ -760,7 +760,7 @@ app.post('/import', async (req, res) => {
   writeFile(executionCount);
   try {
     const c = await fetchVC(config.channelId);
-    if (c) { await renameChannel(c, `Executions: ${executionCount}`); lastUpdate = now; }
+    if (c) { await renameChannel(c, `Executions: ${executionCount}`); lastUpdate = Date.now(); }
   } catch {}
   res.json({ success: true, count: executionCount });
 });
