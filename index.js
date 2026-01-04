@@ -37,6 +37,7 @@ let setupConfig = {};
 const DOWNLOAD_CHANNEL_ID = '1455226125700694027';
 const STAFF_ROLE_ID = '1454608694850486313';
 const LOG_CHANNEL_ID = '1456977089864400970';
+const RATING_CHANNEL_ID = '1456977089864400970';
 
 const sendLog = async (embed) => {
   try {
@@ -658,6 +659,37 @@ client.on('interactionCreate', async (i) => {
       }
     }
   } catch (e) { console.log(`Interaction failed: ${e.message}`); }
+});
+
+app.post('/rating', async (req, res) => {
+  try {
+    const { message, stars, timestamp } = req.body;
+    
+    if (!message || !stars || !timestamp) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    if (stars < 1 || stars > 5) {
+      return res.status(400).json({ success: false, error: 'Stars must be between 1 and 5' });
+    }
+
+    const starEmojis = '⭐'.repeat(stars);
+    
+    const embed = new EmbedBuilder()
+      .setTitle('⭐ New Rating')
+      .setDescription(message)
+      .setColor(3447003)
+      .addFields({ name: 'Rating', value: starEmojis, inline: true })
+      .setTimestamp(new Date(timestamp));
+    
+    const channel = await client.channels.fetch(RATING_CHANNEL_ID);
+    await channel.send({ embeds: [embed] });
+    
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.log(`Rating submission failed: ${error.message}`);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 app.post('/track', async (req, res) => {
