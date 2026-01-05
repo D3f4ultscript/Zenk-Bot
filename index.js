@@ -389,3 +389,59 @@ app.listen(port, () => {
 });
 
 client.login(config.token);
+
+client.on('messageCreate', async (m) => {
+  if (m.author.bot) return;
+
+  const isTradeChan = m.channel.id === '1455105607332925553';
+  const txt = m.content.toLowerCase();
+
+  if (!isTradeChan && (txt.includes('trade') || txt.includes('trading'))) {
+    return m.reply({
+      content: 'Please use the trading channel for trades, not this channel.',
+      allowedMentions: { repliedUser: false }
+    });
+  }
+
+  if (!m.webhookId) {
+    if (checkMsg(m, BLACKLIST_USERS)) {
+      await m.delete().catch(() => {});
+      if (m.member?.moderatable) {
+        try {
+          await m.member.timeout(600000, 'Blacklisted word');
+        } catch {}
+      }
+    }
+    return;
+  }
+
+  try {
+    const wId = m.webhookId, now = Date.now();
+    if (webhookCooldown.has(wId)) {
+      if (now < webhookCooldown.get(wId)) return m.delete().catch(() => {});
+      webhookCooldown.delete(wId);
+      webhookTracker.delete(wId);
+    }
+
+    if (m.author.username !== 'Zenk') {
+      await m.delete().catch(() => {});
+      await restoreWebhook(wId, m.channelId);
+      return;
+    }
+
+    if (checkMsg(m, BLACKLIST_WEBHOOK)) return m.delete().catch(() => {});
+
+    const list = webhookTracker.get(wId) || [];
+    list.push({ timestamp: now, messageId: m.id });
+    const recent = list.filter(x => now - x.timestamp < 8000);
+    webhookTracker.set(wId, recent);
+
+    if (recent.length >= 10) {
+      await bulkDelete(m.channel, recent.map(x => x.messageId));
+      webhookCooldown.set(wId, now + 30000);
+      webhookTracker.set(wId, []);
+    }
+  } catch (e) {
+    console.log(`Message check failed: ${e.message}`);
+  }
+});
