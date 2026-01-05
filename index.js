@@ -17,21 +17,9 @@ const client = new Client({
 
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
 
 const BLACKLIST_WEBHOOK = ['fuck', 'shit', 'bitch', 'asshole', 'bastard', 'damn', 'cunt', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'prick', 'twat', 'wanker', 'bollocks', 'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'schwuchtel', 'schwul', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'kacke', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich'];
 const BLACKLIST_USERS = BLACKLIST_WEBHOOK.filter(w => w !== 'shit' && w !== 'ass');
-
-let executionCount = 0;
-let downloadCount = 0;
-let memberCount = 0;
 
 const executionsFile = path.join(__dirname, 'Executions.txt');
 const setupFile = path.join(__dirname, 'Setup.json');
@@ -41,44 +29,92 @@ const webhookCooldown = new Map();
 const activeTickets = new Map();
 let setupConfig = {};
 
-const DOWNLOAD_CHANNEL_ID = '1455226125700694027';
+let executionCount = 0;
+let memberCount = 0;
+
 const STAFF_ROLE_ID = '1454608694850486313';
 const LOG_CHANNEL_ID = '1456977089864400970';
 const RATING_CHANNEL_ID = '1454624341248708649';
+const TRADE_EXCLUDED_CHANNEL = '1455105607332925553';
+
+const readExecutions = () => {
+  try {
+    if (!fs.existsSync(executionsFile)) return 0;
+    const n = Number(fs.readFileSync(executionsFile, 'utf8').trim());
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  } catch { return 0; }
+};
+
+const writeExecutions = (n) => {
+  try { fs.writeFileSync(executionsFile, String(n)); } catch {}
+};
+
+const readSetup = () => {
+  try {
+    if (!fs.existsSync(setupFile)) return {};
+    return JSON.parse(fs.readFileSync(setupFile, 'utf8'));
+  } catch { return {}; }
+};
+
+const writeSetup = (data) => {
+  try { fs.writeFileSync(setupFile, JSON.stringify(data, null, 2)); } catch {}
+};
+
+const hasBlacklist = (t, bl) => {
+  if (!t) return false;
+  const l = t.toLowerCase();
+  return bl.some(w => l.includes(w));
+};
+
+const checkMsg = (m, bl) => {
+  if (hasBlacklist(m.content, bl)) return true;
+  if (m.embeds?.length) {
+    for (const e of m.embeds) {
+      if (hasBlacklist(e.title, bl) || hasBlacklist(e.description, bl) || hasBlacklist(e.footer?.text, bl) || hasBlacklist(e.author?.name, bl)) return true;
+      if (e.fields?.length) for (const f of e.fields) if (hasBlacklist(f.name, bl) || hasBlacklist(f.value, bl)) return true;
+    }
+  }
+  return false;
+};
+
+const parseDuration = (s) => {
+  const m = s.match(/^(\d+)([smhd])$/);
+  if (!m) return null;
+  const v = parseInt(m[1]), u = m[2];
+  const t = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return v * t[u];
+};
+
+const renameChannel = async (c, name) => {
+  try {
+    const p = c.permissionsFor(client.user);
+    if (p?.has(PermissionFlagsBits.ManageChannels)) await c.setName(name);
+  } catch {}
+};
 
 const sendLog = async (embed) => {
   try {
     const logChannel = await client.channels.fetch(LOG_CHANNEL_ID);
     if (logChannel) await logChannel.send({ embeds: [embed] });
-  } catch (e) { console.log(`Log send failed: ${e.message}`); }
+  } catch {}
 };
 
-const readFile = () => { try { if (!fs.existsSync(executionsFile)) return null; const n = Number(fs.readFileSync(executionsFile, 'utf8').trim()); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null; } catch {} return null; };
-const writeFile = (n) => { try { fs.writeFileSync(executionsFile, String(n)); return true; } catch { return false; } };
-const readSetup = () => { try { if (!fs.existsSync(setupFile)) return {}; return JSON.parse(fs.readFileSync(setupFile, 'utf8')); } catch {} return {}; };
-const writeSetup = (data) => { try { fs.writeFileSync(setupFile, JSON.stringify(data, null, 2)); return true; } catch { return false; } };
-const renameChannel = async (c, n) => { const p = c.permissionsFor(client.user); if (p?.has(PermissionFlagsBits.ManageChannels)) await c.setName(n); };
-const hasBlacklist = (t, bl) => { if (!t) return false; const l = t.toLowerCase(); return bl.some(w => l.includes(w)); };
-const checkMsg = (m, bl) => { if (hasBlacklist(m.content, bl)) return true; if (m.embeds?.length) for (const e of m.embeds) { if (hasBlacklist(e.title, bl) || hasBlacklist(e.description, bl) || hasBlacklist(e.footer?.text, bl) || hasBlacklist(e.author?.name, bl)) return true; if (e.fields?.length) for (const f of e.fields) if (hasBlacklist(f.name, bl) || hasBlacklist(f.value, bl)) return true; } return false; };
-const parseDuration = (s) => { const m = s.match(/^(\d+)([smhd])$/); if (!m) return null; const v = parseInt(m[1]), u = m[2]; const t = { s: 1000, m: 60000, h: 3600000, d: 86400000 }; return v * t[u]; };
-
-const updateChannels = async () => {
+const updateCountsChannels = async () => {
   try {
     const execChannel = await client.channels.fetch(config.channelId);
     if (execChannel) await renameChannel(execChannel, `Executions: ${executionCount}`);
-    
+
     const memberChannel = await client.channels.fetch(config.memberChannelId);
     if (memberChannel) {
       await memberChannel.guild.members.fetch();
       memberCount = memberChannel.guild.members.cache.filter(m => !m.user.bot).size;
       await renameChannel(memberChannel, `Member: ${memberCount}`);
     }
-    
-    const downloadChannel = await client.channels.fetch(DOWNLOAD_CHANNEL_ID);
-    if (downloadChannel) await renameChannel(downloadChannel, `Downloads: ${downloadCount}`);
-    
-    console.log(`Channels updated - Exec: ${executionCount}, Members: ${memberCount}, Downloads: ${downloadCount}`);
-  } catch (e) { console.log(`Channel update failed: ${e.message}`); }
+
+    console.log(`Updated counts → Executions: ${executionCount}, Members: ${memberCount}`);
+  } catch (e) {
+    console.log(`Count update failed: ${e.message}`);
+  }
 };
 
 const restoreWebhook = async (wId, cId) => {
@@ -95,20 +131,20 @@ const bulkDelete = async (c, ids) => {
   try {
     const v = ids.filter(id => id);
     if (!v.length) return;
-    if (v.length === 1) { const m = await c.messages.fetch(v[0]).catch(() => null); if (m) await m.delete(); }
-    else await c.bulkDelete(v, true);
+    if (v.length === 1) {
+      const m = await c.messages.fetch(v[0]).catch(() => null);
+      if (m) await m.delete();
+    } else await c.bulkDelete(v, true);
   } catch (e) { console.log(`Bulk delete failed: ${e.message}`); }
 };
 
 client.once('ready', async () => {
   console.log('Bot is ready');
   setupConfig = readSetup();
-  
-  const fromFile = readFile();
-  if (fromFile !== null) executionCount = fromFile;
-  
-  await updateChannels();
-  setInterval(updateChannels, 600000);
+  executionCount = readExecutions();
+
+  await updateCountsChannels();
+  setInterval(updateCountsChannels, 600000);
 
   const commands = [
     new SlashCommandBuilder().setName('mute').setDescription('Timeout a user').addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true)).addStringOption(o => o.setName('duration').setDescription('Duration (e.g., 10s, 5m, 1h, 2d)').setRequired(true)),
@@ -126,47 +162,58 @@ client.once('ready', async () => {
 
 client.on('messageCreate', async (m) => {
   if (m.author.bot && !m.webhookId) return;
+
   try {
-    if (m.webhookId) {
-      const wId = m.webhookId, now = Date.now();
-      if (webhookCooldown.has(wId)) {
-        if (now < webhookCooldown.get(wId)) { await m.delete(); return; }
-        else { webhookCooldown.delete(wId); webhookTracker.delete(wId); }
+    if (!m.webhookId) {
+      const isTradeChan = m.channel.id === TRADE_EXCLUDED_CHANNEL;
+      const txt = (m.content || '').toLowerCase();
+      if (!isTradeChan && (txt.includes('trade') || txt.includes('trading'))) {
+        await m.reply({ content: 'Please use the trading channel for trades, not this channel.', allowedMentions: { repliedUser: false } });
       }
-      if (m.author.username !== 'Zenk') {
-        await m.delete();
-        await restoreWebhook(wId, m.channelId);
-        await sendLog(new EmbedBuilder().setTitle('⚠️ Webhook Name Violation').setDescription('A webhook with an incorrect name attempted to send a message').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Action Taken', value: 'Message deleted & webhook name restored to "Zenk"', inline: false }).setColor('#ff0000').setTimestamp());
-        return;
-      }
-      if (checkMsg(m, BLACKLIST_WEBHOOK)) {
-        await m.delete();
-        await sendLog(new EmbedBuilder().setTitle('🚫 Webhook Blacklist Detection').setDescription('A webhook message contained blacklisted words').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Message Content', value: m.content.length > 0 ? m.content.substring(0, 1024) : 'No content', inline: false }, { name: 'Action Taken', value: 'Message deleted', inline: false }).setColor('#ff0000').setTimestamp());
-        return;
-      }
-      if (!webhookTracker.has(wId)) webhookTracker.set(wId, []);
-      const msgs = webhookTracker.get(wId);
-      msgs.push({ timestamp: now, messageId: m.id });
-      const recent = msgs.filter(msg => now - msg.timestamp < 8000);
-      webhookTracker.set(wId, recent);
-      if (recent.length >= 10) {
-        await bulkDelete(m.channel, recent.map(msg => msg.messageId));
-        webhookCooldown.set(wId, now + 30000);
-        webhookTracker.set(wId, []);
-        await sendLog(new EmbedBuilder().setTitle('⚡ Webhook Rate Limit Triggered').setDescription('A webhook exceeded the rate limit (10 messages in 8 seconds)').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Messages Deleted', value: `${recent.length} messages`, inline: true }, { name: 'Cooldown', value: '30 seconds', inline: true }).setColor('#ffa500').setTimestamp());
-      }
-    } else {
+
       if (checkMsg(m, BLACKLIST_USERS)) {
-        await m.delete();
+        await m.delete().catch(() => {});
         if (m.member?.moderatable) {
-          try {
-            await m.member.timeout(600000, 'Blacklisted word');
-            await sendLog(new EmbedBuilder().setTitle('🚫 User Blacklist Detection').setDescription('A user message contained blacklisted words').addFields({ name: 'User', value: `${m.author.tag} (${m.author.id})`, inline: false }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Message Content', value: m.content.length > 0 ? m.content.substring(0, 1024) : 'No content', inline: false }, { name: 'Action Taken', value: 'Message deleted & user timed out for 10 minutes', inline: false }).setColor('#ff0000').setTimestamp());
-          } catch (e) { console.log(`Timeout failed: ${e.message}`); }
+          try { await m.member.timeout(600000, 'Blacklisted word'); } catch {}
         }
       }
+      return;
     }
-  } catch (e) { console.log(`Message check failed: ${e.message}`); }
+
+    const wId = m.webhookId, now = Date.now();
+    if (webhookCooldown.has(wId)) {
+      if (now < webhookCooldown.get(wId)) return m.delete().catch(() => {});
+      webhookCooldown.delete(wId);
+      webhookTracker.delete(wId);
+    }
+
+    if (m.author.username !== 'Zenk') {
+      await m.delete().catch(() => {});
+      await restoreWebhook(wId, m.channelId);
+      await sendLog(new EmbedBuilder().setTitle('⚠️ Webhook Name Violation').setDescription('A webhook with an incorrect name attempted to send a message').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Action Taken', value: 'Message deleted & webhook name restored to "Zenk"', inline: false }).setColor('#ff0000').setTimestamp());
+      return;
+    }
+
+    if (checkMsg(m, BLACKLIST_WEBHOOK)) {
+      await m.delete().catch(() => {});
+      await sendLog(new EmbedBuilder().setTitle('🚫 Webhook Blacklist Detection').setDescription('A webhook message contained blacklisted words').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Message Content', value: m.content.length > 0 ? m.content.substring(0, 1024) : 'No content', inline: false }, { name: 'Action Taken', value: 'Message deleted', inline: false }).setColor('#ff0000').setTimestamp());
+      return;
+    }
+
+    const list = webhookTracker.get(wId) || [];
+    list.push({ timestamp: now, messageId: m.id });
+    const recent = list.filter(x => now - x.timestamp < 8000);
+    webhookTracker.set(wId, recent);
+
+    if (recent.length >= 10) {
+      await bulkDelete(m.channel, recent.map(x => x.messageId));
+      webhookCooldown.set(wId, now + 30000);
+      webhookTracker.set(wId, []);
+      await sendLog(new EmbedBuilder().setTitle('⚡ Webhook Rate Limit Triggered').setDescription('A webhook exceeded the rate limit (10 messages in 8 seconds)').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Messages Deleted', value: `${recent.length} messages`, inline: true }, { name: 'Cooldown', value: '30 seconds', inline: true }).setColor('#ffa500').setTimestamp());
+    }
+  } catch (e) {
+    console.log(`Message check failed: ${e.message}`);
+  }
 });
 
 client.on('webhookUpdate', async (c) => {
@@ -202,40 +249,61 @@ client.on('interactionCreate', async (i) => {
         if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
         const feature = i.options.getString('feature');
         const channel = i.options.getChannel('channel');
-        
-        let ticketCategory = i.guild.channels.cache.find(c => c.name === '</> Tickets </>' && c.type === ChannelType.GuildCategory);
-        if (!ticketCategory) {
-          ticketCategory = await i.guild.channels.create({
-            name: '</> Tickets </>',
-            type: ChannelType.GuildCategory,
-            permissionOverwrites: [{ id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels] }]
+
+        if (feature === 'tickets') {
+          let ticketCategory = i.guild.channels.cache.find(c => c.name === '</> Tickets </>' && c.type === ChannelType.GuildCategory);
+          if (!ticketCategory) {
+            ticketCategory = await i.guild.channels.create({
+              name: '</> Tickets </>',
+              type: ChannelType.GuildCategory,
+              permissionOverwrites: [
+                { id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels] }
+              ]
+            });
+          }
+
+          let ticketLogsChannel = i.guild.channels.cache.find(c => c.name === 'ticket-logs' && c.type === ChannelType.GuildText);
+          if (!ticketLogsChannel) {
+            ticketLogsChannel = await i.guild.channels.create({
+              name: 'ticket-logs',
+              type: ChannelType.GuildText,
+              parent: channel.parent,
+              permissionOverwrites: [
+                { id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
+              ]
+            });
+          }
+
+          const selectMenu = new StringSelectMenuBuilder()
+            .setCustomId('ticket-select')
+            .setPlaceholder('Select a ticket type')
+            .setMinValues(1)
+            .setMaxValues(1)
+            .addOptions(
+              new StringSelectMenuOptionBuilder().setLabel('None').setValue('none').setDescription('Deselect'),
+              new StringSelectMenuOptionBuilder().setLabel('Support').setValue('support').setDescription('For bug reports or help with questions')
+            );
+
+          await channel.send({
+            embeds: [new EmbedBuilder().setTitle('🎫 Ticket System').setDescription('If you have any problems or questions, you can open a ticket here. Simply select the appropriate category from the dropdown menu below, and a private support channel will be created for you.').setColor('#5865F2').setTimestamp()],
+            components: [new ActionRowBuilder().addComponents(selectMenu)]
           });
+
+          setupConfig[feature] = channel.id;
+          setupConfig.ticketCategory = ticketCategory.id;
+          setupConfig.ticketLogs = ticketLogsChannel.id;
+          writeSetup(setupConfig);
+
+          await i.reply({ content: `Setup complete: ${feature} → ${channel}\nCategory and logs channel created!`, ephemeral: true });
+          await sendLog(new EmbedBuilder().setTitle('⚙️ Ticket System Setup').addFields({ name: 'Feature', value: feature, inline: true }, { name: 'Channel', value: `${channel} (${channel.name})`, inline: true }, { name: 'Administrator', value: `${i.user.tag} (${i.user.id})`, inline: false }).setColor('#5865F2').setTimestamp());
         }
-
-        let ticketLogsChannel = i.guild.channels.cache.find(c => c.name === 'ticket-logs' && c.type === ChannelType.GuildText);
-        if (!ticketLogsChannel) {
-          ticketLogsChannel = await i.guild.channels.create({
-            name: 'ticket-logs',
-            type: ChannelType.GuildText,
-            parent: channel.parent,
-            permissionOverwrites: [{ id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }]
-          });
-        }
-
-        const selectMenu = new StringSelectMenuBuilder().setCustomId('ticket-select').setPlaceholder('Select a ticket type').setMinValues(1).setMaxValues(1).addOptions(new StringSelectMenuOptionBuilder().setLabel('None').setValue('none').setDescription('Deselect'), new StringSelectMenuOptionBuilder().setLabel('Support').setValue('support').setDescription('For bug reports or help with questions'));
-        await channel.send({ embeds: [new EmbedBuilder().setTitle('🎫 Ticket System').setDescription('If you have any problems or questions, you can open a ticket here. Simply select the appropriate category from the dropdown menu below, and a private support channel will be created for you.').setColor('#5865F2').setTimestamp()], components: [new ActionRowBuilder().addComponents(selectMenu)] });
-
-        setupConfig[feature] = channel.id;
-        setupConfig.ticketCategory = ticketCategory.id;
-        setupConfig.ticketLogs = ticketLogsChannel.id;
-        writeSetup(setupConfig);
-        await i.reply({ content: `Setup complete: ${feature} → ${channel}\nCategory and logs channel created!`, ephemeral: true });
-        await sendLog(new EmbedBuilder().setTitle('⚙️ Ticket System Setup').addFields({ name: 'Feature', value: feature, inline: true }, { name: 'Channel', value: `${channel} (${channel.name})`, inline: true }, { name: 'Administrator', value: `${i.user.tag} (${i.user.id})`, inline: false }).setColor('#5865F2').setTimestamp());
       } else if (i.commandName === 'resetup') {
         if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
         const feature = i.options.getString('feature');
-        
-        if (setupConfig[feature]) {
+
+        if (feature === 'tickets' && setupConfig[feature]) {
           try {
             if (setupConfig.ticketCategory) {
               const category = await i.guild.channels.fetch(setupConfig.ticketCategory).catch(() => null);
@@ -254,6 +322,7 @@ client.on('interactionCreate', async (i) => {
             delete setupConfig.ticketCategory;
             delete setupConfig.ticketLogs;
             writeSetup(setupConfig);
+
             await i.reply({ content: `Removed setup: ${feature}\nAll ticket channels, category, and logs have been deleted.`, ephemeral: true });
             await sendLog(new EmbedBuilder().setTitle('🗑️ Ticket System Removed').addFields({ name: 'Feature', value: feature, inline: true }, { name: 'Administrator', value: `${i.user.tag} (${i.user.id})`, inline: true }, { name: 'Action', value: 'All ticket channels, category, and logs deleted', inline: false }).setColor('#ff0000').setTimestamp());
           } catch (e) {
@@ -264,47 +333,71 @@ client.on('interactionCreate', async (i) => {
           await i.reply({ content: `No setup found for: ${feature}`, ephemeral: true });
         }
       }
-    } else if (i.isStringSelectMenu()) {
-      if (i.customId === 'ticket-select') {
-        const selectedValue = i.values[0];
-        if (selectedValue === 'none') return i.reply({ content: 'Selection cleared.', ephemeral: true });
-        if (activeTickets.has(i.user.id)) {
-          const existingTicketId = activeTickets.get(i.user.id);
-          return i.reply({ content: `You already have an active ticket: <#${existingTicketId}>`, ephemeral: true });
-        }
-        const modal = new ModalBuilder().setCustomId('ticket-create-modal').setTitle('Create Support Ticket');
-        const executorInput = new TextInputBuilder().setCustomId('executor-input').setLabel('Executor').setStyle(TextInputStyle.Short).setPlaceholder('Bunni, Delta...').setRequired(true);
-        const problemInput = new TextInputBuilder().setCustomId('problem-input').setLabel('What is your problem?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Please describe your issue in detail...').setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(executorInput), new ActionRowBuilder().addComponents(problemInput));
-        await i.showModal(modal);
+    } else if (i.isStringSelectMenu() && i.customId === 'ticket-select') {
+      const selectedValue = i.values[0];
+      if (selectedValue === 'none') return i.reply({ content: 'Selection cleared.', ephemeral: true });
+      if (activeTickets.has(i.user.id)) {
+        const existingTicketId = activeTickets.get(i.user.id);
+        return i.reply({ content: `You already have an active ticket: <#${existingTicketId}>`, ephemeral: true });
       }
-    } else if (i.isButton()) {
-      if (i.customId === 'close-ticket') {
-        const modal = new ModalBuilder().setCustomId('close-ticket-modal').setTitle('Close Ticket');
-        const reasonInput = new TextInputBuilder().setCustomId('close-reason').setLabel('Reason for closing').setStyle(TextInputStyle.Paragraph).setPlaceholder('Please provide a reason...').setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
-        await i.showModal(modal);
-      }
+
+      const modal = new ModalBuilder().setCustomId('ticket-create-modal').setTitle('Create Support Ticket');
+      const executorInput = new TextInputBuilder().setCustomId('executor-input').setLabel('Executor').setStyle(TextInputStyle.Short).setPlaceholder('Bunni, Delta...').setRequired(true);
+      const problemInput = new TextInputBuilder().setCustomId('problem-input').setLabel('What is your problem?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Please describe your issue in detail...').setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(executorInput), new ActionRowBuilder().addComponents(problemInput));
+      await i.showModal(modal);
+    } else if (i.isButton() && i.customId === 'close-ticket') {
+      const modal = new ModalBuilder().setCustomId('close-ticket-modal').setTitle('Close Ticket');
+      const reasonInput = new TextInputBuilder().setCustomId('close-reason').setLabel('Reason for closing').setStyle(TextInputStyle.Paragraph).setPlaceholder('Please provide a reason...').setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+      await i.showModal(modal);
     } else if (i.isModalSubmit()) {
       if (i.customId === 'ticket-create-modal') {
         const executor = i.fields.getTextInputValue('executor-input');
         const problem = i.fields.getTextInputValue('problem-input');
         await i.reply({ content: '⏳ Your ticket is being created...', ephemeral: true });
+
         const username = i.user.username.replace(/[^a-zA-Z0-9]/g, '');
         const ticketName = `support-${username}`;
+
         try {
           const ticketChannel = await i.guild.channels.create({
             name: ticketName,
             type: ChannelType.GuildText,
             parent: setupConfig.ticketCategory,
-            permissionOverwrites: [{ id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }, { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }]
+            permissionOverwrites: [
+              { id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+              { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+              { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+            ]
           });
+
           activeTickets.set(i.user.id, ticketChannel.id);
-          const ticketEmbed = new EmbedBuilder().setTitle('🎫 Support Ticket').addFields({ name: 'User', value: `${i.user}`, inline: true }, { name: 'Executor', value: executor, inline: true }, { name: 'Problem', value: problem }).setColor('#5865F2').setTimestamp();
-          const closeButton = new ButtonBuilder().setCustomId('close-ticket').setLabel('Close').setStyle(ButtonStyle.Danger);
-          const ticketMessage = await ticketChannel.send({ content: `${i.user}`, embeds: [ticketEmbed], components: [new ActionRowBuilder().addComponents(closeButton)] });
+
+          const ticketEmbed = new EmbedBuilder()
+            .setTitle('🎫 Support Ticket')
+            .addFields(
+              { name: 'User', value: `${i.user}`, inline: true },
+              { name: 'Executor', value: executor, inline: true },
+              { name: 'Problem', value: problem }
+            )
+            .setColor('#5865F2')
+            .setTimestamp();
+
+          const closeButton = new ButtonBuilder()
+            .setCustomId('close-ticket')
+            .setLabel('Close')
+            .setStyle(ButtonStyle.Danger);
+
+          const ticketMessage = await ticketChannel.send({
+            content: `${i.user}`,
+            embeds: [ticketEmbed],
+            components: [new ActionRowBuilder().addComponents(closeButton)]
+          });
+
           await ticketMessage.pin();
           await i.editReply({ content: `✅ Your ticket has been created: ${ticketChannel}`, ephemeral: true });
+
           await sendLog(new EmbedBuilder().setTitle('🎫 Ticket Created').addFields({ name: 'User', value: `${i.user.tag} (${i.user.id})`, inline: false }, { name: 'Ticket Channel', value: `${ticketChannel} (${ticketChannel.name})`, inline: false }, { name: 'Executor', value: executor, inline: true }, { name: 'Problem', value: problem.substring(0, 1024), inline: false }).setColor('#5865F2').setTimestamp());
         } catch (e) {
           console.log(`Ticket creation failed: ${e.message}`);
@@ -315,22 +408,36 @@ client.on('interactionCreate', async (i) => {
         const channel = i.channel;
         const ticketUser = Array.from(activeTickets.entries()).find(([userId, channelId]) => channelId === channel.id);
         if (!ticketUser) return i.reply({ content: 'Ticket user not found.', ephemeral: true });
+
         const [userId] = ticketUser;
         activeTickets.delete(userId);
+
         await i.reply({ content: `✅ Ticket is being closed...`, ephemeral: true });
-        const user = await client.users.fetch(userId);
-        try {
-          await user.send({ embeds: [new EmbedBuilder().setTitle('🎫 Ticket Closed').setDescription(`Your ticket **${channel.name}** has been closed.`).addFields({ name: 'Reason', value: reason }).setColor('#ff0000').setTimestamp()] });
-        } catch (e) { console.log(`Could not DM user: ${e.message}`); }
-        if (setupConfig.ticketLogs) {
-          const logsChannel = await client.channels.fetch(setupConfig.ticketLogs);
-          await logsChannel.send({ embeds: [new EmbedBuilder().setTitle(`📋 Ticket Closed: ${channel.name}`).addFields({ name: 'Ticket User', value: `<@${userId}>`, inline: true }, { name: 'Closed By', value: `<@${i.user.id}>`, inline: true }, { name: 'Reason', value: reason }).setColor('#ff0000').setTimestamp()] });
+
+        const user = await client.users.fetch(userId).catch(() => null);
+        if (user) {
+          try {
+            await user.send({ embeds: [new EmbedBuilder().setTitle('🎫 Ticket Closed').setDescription(`Your ticket **${channel.name}** has been closed.`).addFields({ name: 'Reason', value: reason }).setColor('#ff0000').setTimestamp()] });
+          } catch {}
         }
-        await sendLog(new EmbedBuilder().setTitle('🎫 Ticket Closed').addFields({ name: 'Ticket Channel', value: channel.name, inline: true }, { name: 'User', value: `${user.tag} (${userId})`, inline: true }, { name: 'Closed By', value: `${i.user.tag} (${i.user.id})`, inline: false }, { name: 'Reason', value: reason, inline: false }).setColor('#ff0000').setTimestamp());
+
+        if (setupConfig.ticketLogs) {
+          const logsChannel = await client.channels.fetch(setupConfig.ticketLogs).catch(() => null);
+          if (logsChannel) {
+            await logsChannel.send({
+              embeds: [new EmbedBuilder().setTitle(`📋 Ticket Closed: ${channel.name}`).addFields({ name: 'Ticket User', value: `<@${userId}>`, inline: true }, { name: 'Closed By', value: `<@${i.user.id}>`, inline: true }, { name: 'Reason', value: reason }).setColor('#ff0000').setTimestamp()]
+            });
+          }
+        }
+
+        await sendLog(new EmbedBuilder().setTitle('🎫 Ticket Closed').addFields({ name: 'Ticket Channel', value: channel.name, inline: true }, { name: 'User', value: user ? `${user.tag} (${userId})` : userId, inline: true }, { name: 'Closed By', value: `${i.user.tag} (${i.user.id})`, inline: false }, { name: 'Reason', value: reason, inline: false }).setColor('#ff0000').setTimestamp());
+
         setTimeout(async () => { try { await channel.delete(); } catch (e) { console.log(`Could not delete channel: ${e.message}`); } }, 5000);
       }
     }
-  } catch (e) { console.log(`Interaction failed: ${e.message}`); }
+  } catch (e) {
+    console.log(`Interaction failed: ${e.message}`);
+  }
 });
 
 app.post('/rating', async (req, res) => {
@@ -341,9 +448,17 @@ app.post('/rating', async (req, res) => {
     if (!message || !stars || !timestamp) return res.status(400).json({ success: false, error: 'Missing required fields: message, stars, timestamp' });
     const starsNum = Number(stars);
     if (isNaN(starsNum) || starsNum < 1 || starsNum > 5) return res.status(400).json({ success: false, error: 'Stars must be a number between 1 and 5' });
-    const embed = new EmbedBuilder().setTitle('⭐ New Rating').setDescription(String(message)).setColor(3447003).addFields({ name: 'Rating', value: '⭐'.repeat(starsNum), inline: true }).setTimestamp(new Date(timestamp));
-    const channel = await client.channels.fetch(RATING_CHANNEL_ID);
+
+    const embed = new EmbedBuilder()
+      .setTitle('⭐ New Rating')
+      .setDescription(String(message))
+      .setColor(3447003)
+      .addFields({ name: 'Rating', value: '⭐'.repeat(starsNum), inline: true })
+      .setTimestamp(new Date(timestamp));
+
+    const channel = await client.channels.fetch(RATING_CHANNEL_ID).catch(() => null);
     if (!channel) return res.status(404).json({ success: false, error: 'Rating channel not found' });
+
     await channel.send({ embeds: [embed] });
     console.log('Rating sent successfully');
     res.status(200).json({ success: true, message: 'Rating submitted successfully' });
@@ -353,95 +468,33 @@ app.post('/rating', async (req, res) => {
   }
 });
 
-app.post('/track', async (req, res) => {
-  downloadCount++;
-  console.log(`Download #${downloadCount} received`);
-  res.sendStatus(200);
-});
-
 app.post('/execution', async (req, res) => {
   try {
-    executionCount++; 
-    writeFile(executionCount);
+    executionCount++;
+    writeExecutions(executionCount);
     res.json({ success: true, count: executionCount });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
-app.get('/export', async (req, res) => {
+app.get('/export', (req, res) => {
   res.type('text/plain').send(String(executionCount));
 });
 
-app.post('/import', async (req, res) => {
+app.post('/import', (req, res) => {
   const n = Number(req.body?.count);
   if (!Number.isFinite(n) || n < 0) return res.status(400).json({ success: false });
-  executionCount = Math.floor(n); 
-  writeFile(executionCount);
+  executionCount = Math.floor(n);
+  writeExecutions(executionCount);
   res.json({ success: true, count: executionCount });
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'online', executions: executionCount, downloads: downloadCount, members: memberCount, botReady: client.isReady() });
+  res.json({ status: 'online', executions: executionCount, members: memberCount, botReady: client.isReady() });
 });
 
 const port = config.port || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+app.listen(port, () => console.log(`Server running on port ${port}`));
 
 client.login(config.token);
-
-client.on('messageCreate', async (m) => {
-  if (m.author.bot) return;
-
-  const isTradeChan = m.channel.id === '1455105607332925553';
-  const txt = m.content.toLowerCase();
-
-  if (!isTradeChan && (txt.includes('trade') || txt.includes('trading'))) {
-    return m.reply({
-      content: 'Please use the trading channel for trades, not this channel.',
-      allowedMentions: { repliedUser: false }
-    });
-  }
-
-  if (!m.webhookId) {
-    if (checkMsg(m, BLACKLIST_USERS)) {
-      await m.delete().catch(() => {});
-      if (m.member?.moderatable) {
-        try {
-          await m.member.timeout(600000, 'Blacklisted word');
-        } catch {}
-      }
-    }
-    return;
-  }
-
-  try {
-    const wId = m.webhookId, now = Date.now();
-    if (webhookCooldown.has(wId)) {
-      if (now < webhookCooldown.get(wId)) return m.delete().catch(() => {});
-      webhookCooldown.delete(wId);
-      webhookTracker.delete(wId);
-    }
-
-    if (m.author.username !== 'Zenk') {
-      await m.delete().catch(() => {});
-      await restoreWebhook(wId, m.channelId);
-      return;
-    }
-
-    if (checkMsg(m, BLACKLIST_WEBHOOK)) return m.delete().catch(() => {});
-
-    const list = webhookTracker.get(wId) || [];
-    list.push({ timestamp: now, messageId: m.id });
-    const recent = list.filter(x => now - x.timestamp < 8000);
-    webhookTracker.set(wId, recent);
-
-    if (recent.length >= 10) {
-      await bulkDelete(m.channel, recent.map(x => x.messageId));
-      webhookCooldown.set(wId, now + 30000);
-      webhookTracker.set(wId, []);
-    }
-  } catch (e) {
-    console.log(`Message check failed: ${e.message}`);
-  }
-});
