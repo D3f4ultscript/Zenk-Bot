@@ -18,8 +18,8 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-const BLACKLIST_WEBHOOK = ['fuck', 'shit', 'bitch', 'asshole', 'bastard', 'damn', 'cunt', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kys', 'kill yourself', 'motherfucker', 'bullshit', 'prick', 'twat', 'wanker', 'bollocks', 'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'schwuchtel', 'schwul', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'kacke', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich'];
-const BLACKLIST_USERS = BLACKLIST_WEBHOOK.filter(w => w !== 'shit' && w !== 'ass');
+const BLACKLIST_WEBHOOK = ['bitch', 'asshole', 'bastard', 'cunt', 'cock', 'pussy', 'whore', 'slut', 'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 'hitler', 'kill yourself', 'motherfucker', 'bullshit', 'prick', 'twat', 'wanker', 'bollocks', 'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 'fick', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 'schwuchtel', 'schwul', 'drecksau', 'sau', 'schwein', 'drecksschwein', 'miststück', 'kacke', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich'];
+const BLACKLIST_USERS = BLACKLIST_WEBHOOK.filter(w => w !== 'ass');
 
 const executionsFile = path.join(__dirname, 'Executions.txt');
 const setupFile = path.join(__dirname, 'Setup.json');
@@ -186,7 +186,7 @@ client.on('messageCreate', async (m) => {
       if (checkMsg(m, BLACKLIST_USERS)) {
         await m.delete().catch(() => {});
         if (m.member?.moderatable) {
-          try { await m.member.timeout(600000, 'Blacklisted word'); } catch {}
+          try { await m.member.timeout(300000, 'Blacklisted word'); } catch {}
         }
       }
       return;
@@ -549,5 +549,3 @@ const port = config.port || 3000;
 app.listen(port, () => console.log(`Server running on port ${port}`));
 
 client.login(config.token);
-
-
