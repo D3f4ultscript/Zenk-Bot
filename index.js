@@ -27,8 +27,9 @@ const setupFile = path.join(__dirname, 'Setup.json');
 const webhookTracker = new Map();
 const webhookCooldown = new Map();
 const activeTickets = new Map();
-let setupConfig = {};
+const lastMessages = new Map();
 
+let setupConfig = {};
 let executionCount = 0;
 let memberCount = 0;
 
@@ -150,7 +151,8 @@ client.once('ready', async () => {
     new SlashCommandBuilder().setName('mute').setDescription('Timeout a user').addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true)).addStringOption(o => o.setName('duration').setDescription('Duration (e.g., 10s, 5m, 1h, 2d)').setRequired(true)),
     new SlashCommandBuilder().setName('unmute').setDescription('Remove timeout from a user').addUserOption(o => o.setName('user').setDescription('User to unmute').setRequired(true)),
     new SlashCommandBuilder().setName('setup').setDescription('Setup bot features').addStringOption(o => o.setName('feature').setDescription('Feature to setup').setRequired(true).addChoices({ name: 'Tickets', value: 'tickets' })).addChannelOption(o => o.setName('channel').setDescription('Channel for the feature').setRequired(true).addChannelTypes(ChannelType.GuildText)),
-    new SlashCommandBuilder().setName('resetup').setDescription('Remove bot setup').addStringOption(o => o.setName('feature').setDescription('Feature to remove').setRequired(true).addChoices({ name: 'Tickets', value: 'tickets' }))
+    new SlashCommandBuilder().setName('resetup').setDescription('Remove bot setup').addStringOption(o => o.setName('feature').setDescription('Feature to remove').setRequired(true).addChoices({ name: 'Tickets', value: 'tickets' })),
+    new SlashCommandBuilder().setName('clear').setDescription('Clear messages in this channel').addIntegerOption(o => o.setName('amount').setDescription('Number of messages to delete (1-100)').setRequired(true).setMinValue(1).setMaxValue(100)).addUserOption(o => o.setName('user').setDescription('Only delete messages from this user').setRequired(false))
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -165,8 +167,18 @@ client.on('messageCreate', async (m) => {
 
   try {
     if (!m.webhookId) {
+      const key = `${m.channel.id}-${m.author.id}`;
+      const content = m.content || '';
+      const embedsJson = JSON.stringify(m.embeds?.map(e => e.toJSON()) || []);
+      const last = lastMessages.get(key);
+      if (last && last.content === content && last.embedsJson === embedsJson) {
+        await m.delete().catch(() => {});
+        return;
+      }
+      lastMessages.set(key, { content, embedsJson });
+
       const isTradeChan = m.channel.id === TRADE_EXCLUDED_CHANNEL;
-      const txt = (m.content || '').toLowerCase();
+      const txt = content.toLowerCase();
       if (!isTradeChan && (txt.includes('trade') || txt.includes('trading'))) {
         await m.reply({ content: 'Please use the trading channel for trades, not this channel.', allowedMentions: { repliedUser: false } });
       }
@@ -199,6 +211,16 @@ client.on('messageCreate', async (m) => {
       await sendLog(new EmbedBuilder().setTitle('🚫 Webhook Blacklist Detection').setDescription('A webhook message contained blacklisted words').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Message Content', value: m.content.length > 0 ? m.content.substring(0, 1024) : 'No content', inline: false }, { name: 'Action Taken', value: 'Message deleted', inline: false }).setColor('#ff0000').setTimestamp());
       return;
     }
+
+    const wKey = `${m.channel.id}-${m.author.id}`;
+    const wContent = m.content || '';
+    const wEmbedsJson = JSON.stringify(m.embeds?.map(e => e.toJSON()) || []);
+    const wLast = lastMessages.get(wKey);
+    if (wLast && wLast.content === wContent && wLast.embedsJson === wEmbedsJson) {
+      await m.delete().catch(() => {});
+      return;
+    }
+    lastMessages.set(wKey, { content: wContent, embedsJson: wEmbedsJson });
 
     const list = webhookTracker.get(wId) || [];
     list.push({ timestamp: now, messageId: m.id });
@@ -331,6 +353,35 @@ client.on('interactionCreate', async (i) => {
           }
         } else {
           await i.reply({ content: `No setup found for: ${feature}`, ephemeral: true });
+        }
+      } else if (i.commandName === 'clear') {
+        if (!i.member.permissions.has(PermissionFlagsBits.ManageMessages)) return i.reply({ content: 'You do not have permission to manage messages.', ephemeral: true });
+
+        const amount = i.options.getInteger('amount');
+        const targetUser = i.options.getUser('user');
+
+        try {
+          const fetched = await i.channel.messages.fetch({ limit: amount > 100 ? 100 : amount });
+
+          let toDelete = fetched;
+          if (targetUser) {
+            const arr = fetched.filter(m => m.author.id === targetUser.id).first(amount);
+            if (arr) {
+              const ids = arr.map(m => m.id);
+              toDelete = fetched.filter(m => ids.includes(m.id));
+            } else {
+              toDelete = fetched.clear();
+            }
+          }
+
+          if (!toDelete || toDelete.size === 0) return i.reply({ content: 'No messages found to delete.', ephemeral: true });
+
+          const deleted = await i.channel.bulkDelete(toDelete, true);
+
+          await i.reply({ content: `Deleted ${deleted.size} message(s)` + (targetUser ? ` from ${targetUser.tag}` : '') + '.', ephemeral: true });
+        } catch (e) {
+          console.log(`Clear failed: ${e.message}`);
+          await i.reply({ content: 'Failed to delete messages. Only messages newer than 14 days can be bulk deleted.', ephemeral: true });
         }
       }
     } else if (i.isStringSelectMenu() && i.customId === 'ticket-select') {
@@ -498,3 +549,5 @@ const port = config.port || 3000;
 app.listen(port, () => console.log(`Server running on port ${port}`));
 
 client.login(config.token);
+
+
