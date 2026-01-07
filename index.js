@@ -27,7 +27,7 @@ const setupFile = path.join(__dirname, 'Setup.json');
 const webhookTracker = new Map();
 const webhookCooldown = new Map();
 const activeTickets = new Map();
-const lastMessages = new Map();
+const messageHistory = new Map();
 
 let setupConfig = {};
 let executionCount = 0;
@@ -166,17 +166,28 @@ client.on('messageCreate', async (m) => {
   if (m.author.bot && !m.webhookId) return;
 
   try {
-    if (!m.webhookId) {
-      const key = `${m.channel.id}-${m.author.id}`;
-      const content = m.content || '';
-      const embedsJson = JSON.stringify(m.embeds?.map(e => e.toJSON()) || []);
-      const last = lastMessages.get(key);
-      if (last && last.content === content && last.embedsJson === embedsJson) {
-        await m.delete().catch(() => {});
-        return;
-      }
-      lastMessages.set(key, { content, embedsJson });
+    const key = `${m.channel.id}-${m.author.id}`;
+    const content = m.content || '';
+    const embedsJson = JSON.stringify(m.embeds?.map(e => e.toJSON()) || []);
+    const now = Date.now();
 
+    if (!messageHistory.has(key)) messageHistory.set(key, []);
+    const history = messageHistory.get(key);
+    
+    const recentHistory = history.filter(h => now - h.timestamp < 120000);
+    messageHistory.set(key, recentHistory);
+
+    const isDuplicate = recentHistory.some(h => h.content === content && h.embedsJson === embedsJson);
+    
+    if (isDuplicate) {
+      await m.delete().catch(() => {});
+      return;
+    }
+
+    recentHistory.push({ content, embedsJson, timestamp: now });
+    messageHistory.set(key, recentHistory);
+
+    if (!m.webhookId) {
       const isTradeChan = m.channel.id === TRADE_EXCLUDED_CHANNEL;
       const txt = content.toLowerCase();
       if (!isTradeChan && (txt.includes('trade') || txt.includes('trading'))) {
@@ -192,7 +203,7 @@ client.on('messageCreate', async (m) => {
       return;
     }
 
-    const wId = m.webhookId, now = Date.now();
+    const wId = m.webhookId;
     if (webhookCooldown.has(wId)) {
       if (now < webhookCooldown.get(wId)) return m.delete().catch(() => {});
       webhookCooldown.delete(wId);
@@ -211,16 +222,6 @@ client.on('messageCreate', async (m) => {
       await sendLog(new EmbedBuilder().setTitle('🚫 Webhook Blacklist Detection').setDescription('A webhook message contained blacklisted words').addFields({ name: 'Webhook Name', value: m.author.username, inline: true }, { name: 'Webhook ID', value: wId, inline: true }, { name: 'Channel', value: `${m.channel} (${m.channel.name})`, inline: false }, { name: 'Message Content', value: m.content.length > 0 ? m.content.substring(0, 1024) : 'No content', inline: false }, { name: 'Action Taken', value: 'Message deleted', inline: false }).setColor('#ff0000').setTimestamp());
       return;
     }
-
-    const wKey = `${m.channel.id}-${m.author.id}`;
-    const wContent = m.content || '';
-    const wEmbedsJson = JSON.stringify(m.embeds?.map(e => e.toJSON()) || []);
-    const wLast = lastMessages.get(wKey);
-    if (wLast && wLast.content === wContent && wLast.embedsJson === wEmbedsJson) {
-      await m.delete().catch(() => {});
-      return;
-    }
-    lastMessages.set(wKey, { content: wContent, embedsJson: wEmbedsJson });
 
     const list = webhookTracker.get(wId) || [];
     list.push({ timestamp: now, messageId: m.id });
