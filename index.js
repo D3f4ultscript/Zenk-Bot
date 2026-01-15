@@ -83,16 +83,17 @@ client.on('messageCreate', async (m) => {
     const key = `${m.channel.id}-${m.author.id}`;
     const content = m.content || '';
     const contentLower = content.toLowerCase();
+    const embedsJson = JSON.stringify(m.embeds?.map(e => ({ title: e.title, description: e.description, fields: e.fields, footer: e.footer, author: e.author, color: e.color })) || []);
 
     if (!messageHistory.has(key)) messageHistory.set(key, []);
     const history = messageHistory.get(key).filter(h => now - h.timestamp < 120000);
     
-    if (history.some(h => h.content === content)) {
+    if (history.some(h => h.content === content && h.embedsJson === embedsJson)) {
       await m.delete().catch(() => {});
       return;
     }
     
-    history.push({ content, timestamp: now, messageId: m.id });
+    history.push({ content, embedsJson, timestamp: now, messageId: m.id });
     messageHistory.set(key, history);
 
     if (!m.webhookId) {
@@ -308,7 +309,7 @@ app.post('/rating', async (req, res) => {
     
     const starEmojis = '⭐'.repeat(n);
     const date = new Date(timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-    await channel.send(`**⭐ New Rating**\n${message}\n\n**Rating:** ${starEmojis}\n*${date}*`);
+    await channel.send(`## New Rating\n${message}\n\n**Rating:** ${starEmojis}\n*${date}*`);
     
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
