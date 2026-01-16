@@ -30,6 +30,7 @@ const IDS = {
   rating: '1454624341248708649',
   tradeExcluded: '1455105607332925553',
   bypass: '1453892506801541201',
+  antiBypass: '1454089114348425348',
   linkAllowed2: '1454774839519875123',
   download: '1455226125700694027'
 };
@@ -47,6 +48,14 @@ const renameChannel = async (c, n) => { try { if (c.permissionsFor(client.user)?
 const sendLog = async (e) => { try { const c = await client.channels.fetch(IDS.log); if (c) await c.send({ embeds: [e] }); } catch {} };
 const restoreWebhook = async (wId, cId) => { try { const c = await client.channels.fetch(cId); if (!c) return; const whs = await c.fetchWebhooks(); const wh = whs.get(wId); if (wh && wh.name !== 'Zenk') await wh.edit({ name: 'Zenk' }); } catch {} };
 const bulkDelete = async (c, ids) => { try { const v = ids.filter(Boolean); if (!v.length) return; if (v.length === 1) { const m = await c.messages.fetch(v[0]).catch(() => null); if (m) await m.delete(); } else await c.bulkDelete(v, true); } catch {} };
+
+const checkBypass = (m) => {
+  if (m.webhookId) return false;
+  if (!m.member?.roles?.cache) return false;
+  const hasB = m.member.roles.cache.has(IDS.bypass);
+  const hasAB = m.member.roles.cache.has(IDS.antiBypass);
+  return hasB && !hasAB;
+};
 
 const updateCountsChannels = async () => {
   try {
@@ -92,8 +101,7 @@ const autoClearLoop = async (cId) => {
     const del = [];
     for (const m of msgs.values()) {
       if (m.author.bot || m.webhookId) { del.push(m.id); continue; }
-      const mem = m.member || guild.members.cache.get(m.author.id);
-      if (!mem?.roles.cache.has(IDS.bypass)) del.push(m.id);
+      if (!checkBypass(m)) del.push(m.id);
     }
     if (del.length) await bulkDelete(c, del);
   } catch {}
@@ -146,9 +154,9 @@ client.on('guildMemberAdd', async (m) => {
 client.on('guildMemberRemove', updateCountsChannels);
 
 client.on('messageCreate', async (m) => {
-  const bypass = !m.webhookId && m.member?.roles?.cache?.has(IDS.bypass);
+  const bypass = checkBypass(m);
 
-  if (autoClearChannels.has(m.channelId) && !m.author.bot && !bypass) {
+  if (autoClearChannels.has(m.channelId) && !bypass) {
     await m.delete().catch(() => {});
     return;
   }
@@ -158,23 +166,23 @@ client.on('messageCreate', async (m) => {
     const content = m.content || '';
     const contentLower = content.toLowerCase();
 
-    if (!bypass) {
-      const senderId = m.webhookId || m.author.id;
-      const userKey = `${m.channel.id}::${senderId}`;
-      
-      if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
-      const history = messageHistory.get(userKey).filter(h => now - h.timestamp < 120000);
-      
-      const isDuplicate = history.some(h => h.content === content);
-      
-      if (isDuplicate) {
-        await m.delete().catch(() => {});
-        return;
-      }
-      
-      history.push({ content, timestamp: now, messageId: m.id });
-      messageHistory.set(userKey, history);
+    const senderId = m.webhookId || m.author.id;
+    const userKey = `${m.channel.id}::${senderId}`;
+    
+    if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
+    const history = messageHistory.get(userKey).filter(h => now - h.timestamp < 120000);
+    
+    const isDuplicate = history.some(h => h.content === content);
+    
+    if (isDuplicate && !bypass) {
+      await m.delete().catch(() => {});
+      return;
     }
+    
+    history.push({ content, timestamp: now, messageId: m.id });
+    messageHistory.set(userKey, history);
+
+    if (m.author.bot && !m.webhookId) return;
 
     if (!m.webhookId) {
       if (!bypass) {
@@ -185,7 +193,6 @@ client.on('messageCreate', async (m) => {
         spamHistory.push(now);
         userSpamTracker.set(m.author.id, spamHistory);
         if (spamHistory.length >= 5) {
-          const userKey = `${m.channel.id}::${m.author.id}`;
           const h = messageHistory.get(userKey) || [];
           await bulkDelete(m.channel, h.slice(-5).map(x => x.messageId));
           if (m.member?.moderatable) try { await m.member.timeout(TIMEOUTS.spam, 'Message spam'); } catch {}
@@ -201,8 +208,9 @@ client.on('messageCreate', async (m) => {
         }
 
         const hasLinkRole = m.member?.roles.cache.has(IDS.bypass) || m.member?.roles.cache.has(IDS.linkAllowed2);
+        const hasAnti = m.member?.roles.cache.has(IDS.antiBypass);
         const discordInviteRegex = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-zA-Z0-9]+/gi;
-        if (!hasLinkRole && discordInviteRegex.test(content)) {
+        if (!(hasLinkRole && !hasAnti) && discordInviteRegex.test(content)) {
           await m.delete().catch(() => {});
           if (m.member?.moderatable) {
             try {
@@ -425,8 +433,7 @@ app.post('/rating', async (req, res) => {
     if (!Number.isFinite(n) || n < 1 || n > 5) return res.status(400).json({ success: false, error: 'Invalid stars' });
     const channel = await client.channels.fetch(IDS.rating).catch(() => null);
     if (!channel) return res.status(404).json({ success: false, error: 'Channel not found' });
-    const date = new Date(timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-    await channel.send(`## New Rating\n${message}\n\n**Rating:** ${'⭐'.repeat(n)}\n*${date}*`);
+    await channel.send(`## New Rating\n${message}\n\n**Rating:** ${'⭐'.repeat(n)}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
