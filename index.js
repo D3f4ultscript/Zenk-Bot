@@ -401,3 +401,4 @@ app.get('/', (req, res) => res.json({ status: 'online', executions: executionCou
 
 app.listen(config.port || 3000, () => console.log('Server running'));
 client.login(config.token);
+
