@@ -155,17 +155,25 @@ client.on('messageCreate', async (m) => {
 
   try {
     const now = Date.now();
-    const senderId = m.webhookId || m.author.id;
-    const key = `${m.channel.id}-${senderId}`;
     const content = m.content || '';
     const contentLower = content.toLowerCase();
 
     if (!bypass) {
-      if (!messageHistory.has(key)) messageHistory.set(key, []);
-      const history = messageHistory.get(key).filter(h => now - h.timestamp < 120000);
-      if (history.some(h => h.content === content)) { await m.delete().catch(() => {}); return; }
+      const senderId = m.webhookId || m.author.id;
+      const userKey = `${m.channel.id}::${senderId}`;
+      
+      if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
+      const history = messageHistory.get(userKey).filter(h => now - h.timestamp < 120000);
+      
+      const isDuplicate = history.some(h => h.content === content);
+      
+      if (isDuplicate) {
+        await m.delete().catch(() => {});
+        return;
+      }
+      
       history.push({ content, timestamp: now, messageId: m.id });
-      messageHistory.set(key, history);
+      messageHistory.set(userKey, history);
     }
 
     if (!m.webhookId) {
@@ -177,7 +185,8 @@ client.on('messageCreate', async (m) => {
         spamHistory.push(now);
         userSpamTracker.set(m.author.id, spamHistory);
         if (spamHistory.length >= 5) {
-          const h = messageHistory.get(`${m.channel.id}-${m.author.id}`) || [];
+          const userKey = `${m.channel.id}::${m.author.id}`;
+          const h = messageHistory.get(userKey) || [];
           await bulkDelete(m.channel, h.slice(-5).map(x => x.messageId));
           if (m.member?.moderatable) try { await m.member.timeout(TIMEOUTS.spam, 'Message spam'); } catch {}
           userSpamTracker.delete(m.author.id);
@@ -285,22 +294,22 @@ client.on('interactionCreate', async (i) => {
         await sendLog(new EmbedBuilder().setTitle('✅ Timeout Removed').addFields({ name: 'User', value: user.tag, inline: true }, { name: 'Mod', value: i.user.tag, inline: true }).setColor('#00ff00').setTimestamp());
       } else if (i.commandName === 'setup') {
         if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
+        
+        await i.deferReply({ ephemeral: true });
+        
         const feature = i.options.getString('feature'), channel = i.options.getChannel('channel');
         if (feature === 'tickets') {
           const cat = await ensureTicketInfra(i.guild, channel);
           if (cat) {
-            const logsId = setupConfig.ticketLogs ? setupConfig.ticketLogs : null;
             await channel.send({
               embeds: [new EmbedBuilder().setTitle('🎫 Ticket System').setDescription('Select a category to open a support ticket.').setColor('#5865F2').setTimestamp()],
               components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('ticket-select').setPlaceholder('Select ticket type').addOptions(new StringSelectMenuOptionBuilder().setLabel('None').setValue('none').setDescription('Deselect'), new StringSelectMenuOptionBuilder().setLabel('Support').setValue('support').setDescription('Bug reports or questions')))]
             });
-            setupConfig.ticketCategory = cat.id;
-            if (logsId) setupConfig.ticketLogs = logsId;
           }
         }
         setupConfig[feature] = channel.id;
         writeSetup(setupConfig);
-        await i.reply({ content: `Setup complete: ${feature} → ${channel}`, ephemeral: true });
+        await i.editReply({ content: `Setup complete: ${feature} → ${channel}` });
       } else if (i.commandName === 'resetup') {
         if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: 'No permissions', ephemeral: true });
         const feature = i.options.getString('feature');
@@ -352,10 +361,10 @@ client.on('interactionCreate', async (i) => {
     } else if (i.isModalSubmit()) {
       if (i.customId === 'ticket-create-modal') {
         const executor = i.fields.getTextInputValue('executor-input'), problem = i.fields.getTextInputValue('problem-input');
-        await i.reply({ content: '⏳ Creating ticket...', ephemeral: true });
+        await i.deferReply({ ephemeral: true });
 
         const cat = await ensureTicketInfra(i.guild, i.channel);
-        if (!cat) return i.editReply({ content: '❌ Ticket category missing and could not be created.', ephemeral: true });
+        if (!cat) return i.editReply({ content: '❌ Ticket category could not be created.' });
 
         const ticketChannel = await i.guild.channels.create({
           name: `support-${i.user.username.replace(/[^a-zA-Z0-9]/g, '')}`,
@@ -381,7 +390,7 @@ client.on('interactionCreate', async (i) => {
         });
 
         await msg.pin().catch(() => {});
-        await i.editReply({ content: `✅ Ticket created: ${ticketChannel}`, ephemeral: true });
+        await i.editReply({ content: `✅ Ticket created: ${ticketChannel}` });
         await sendLog(new EmbedBuilder().setTitle('🎫 Ticket Created').addFields({ name: 'User', value: i.user.tag }, { name: 'Channel', value: ticketChannel.name }, { name: 'Executor', value: executor }).setColor('#5865F2').setTimestamp());
       } else if (i.customId === 'close-ticket-modal') {
         const reason = i.fields.getTextInputValue('close-reason'), channel = i.channel;
