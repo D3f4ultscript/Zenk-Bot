@@ -72,7 +72,12 @@ const activeTickets = new Map();
 const messageHistory = new Map();
 const userSpamTracker = new Map();
 const autoClearChannels = new Map();
-const ratingChannelLocked = { locked: false, lastMessageTime: 0, messageCount: 0, resetTimeout: null };
+const ratingChannelLocked = { 
+  locked: false, 
+  messageTimestamps: [], 
+  resetTimeout: null,
+  lastLockTime: 0
+};
 
 let setupConfig = {};
 let executionCount = 0;
@@ -394,59 +399,31 @@ client.on('messageCreate', async (m) => {
   if (m.channel.id === IDS.rating) {
     const content = m.content || '';
     const now = Date.now();
-    
-    // Check if channel is locked (spam wave detected)
-    if (ratingChannelLocked.locked) {
-      // Staff can still send messages even when locked
-      if (!m.member?.roles.cache.has(IDS.staff) && !m.author.bot) {
-        await m.delete().catch(() => {});
-        return;
-      }
-    }
-    
-    // Skip bots and staff for spam detection
     const isStaff = m.member?.roles.cache.has(IDS.staff);
     const isBot = m.author.bot;
     
+    // SPAM DETECTION: Track ALL messages in rating channel
+    const timeWindow = 10000; // 10 seconds
+    const spamThreshold = 8; // 8 messages trigger lock
+    const lockDuration = 30000; // Lock for 30 seconds
+    
+    // Clean old timestamps (older than timeWindow)
+    ratingChannelLocked.messageTimestamps = ratingChannelLocked.messageTimestamps.filter(
+      ts => now - ts < timeWindow
+    );
+    
+    // If channel is locked, block all non-staff messages immediately
+    if (ratingChannelLocked.locked) {
+      if (!isStaff && !isBot) {
+        await m.delete().catch(() => {});
+        return; // Don't count blocked messages
+      }
+      // Staff messages during lock - don't count for spam detection
+      return;
+    }
+    
+    // Only check @ and / for non-staff, non-bot messages BEFORE counting
     if (!isStaff && !isBot) {
-      // SPAM DETECTION: Check for rapid message rate
-      const timeWindow = 10000; // 10 seconds
-      const spamThreshold = 10; // 10 messages
-      const lockDuration = 60000; // Lock for 60 seconds
-      
-      if (now - ratingChannelLocked.lastMessageTime > timeWindow) {
-        // Reset counter if outside time window
-        ratingChannelLocked.messageCount = 1;
-        ratingChannelLocked.lastMessageTime = now;
-      } else {
-        ratingChannelLocked.messageCount++;
-        ratingChannelLocked.lastMessageTime = now;
-      }
-      
-      // Lock channel if spam detected
-      if (ratingChannelLocked.messageCount >= spamThreshold && !ratingChannelLocked.locked) {
-        ratingChannelLocked.locked = true;
-        
-        await sendLog(new EmbedBuilder()
-          .setTitle('🚨 Rating Channel Locked - Spam Wave Detected')
-          .setDescription(`The rating channel has been temporarily locked due to spam.\n**Messages in 10s:** ${ratingChannelLocked.messageCount}`)
-          .setColor('#ff0000')
-          .setTimestamp());
-        
-        // Auto-unlock after lock duration
-        if (ratingChannelLocked.resetTimeout) clearTimeout(ratingChannelLocked.resetTimeout);
-        ratingChannelLocked.resetTimeout = setTimeout(() => {
-          ratingChannelLocked.locked = false;
-          ratingChannelLocked.messageCount = 0;
-          ratingChannelLocked.lastMessageTime = 0;
-          sendLog(new EmbedBuilder()
-            .setTitle('✅ Rating Channel Unlocked')
-            .setDescription('The rating channel has been unlocked. Normal operations resumed.')
-            .setColor('#00ff00')
-            .setTimestamp());
-        }, lockDuration);
-      }
-      
       // BLOCK @ and / symbols
       const hasAtSymbol = content.includes('@');
       const hasSlashSymbol = content.includes('/');
@@ -474,13 +451,35 @@ client.on('messageCreate', async (m) => {
           .setColor('#ff0000')
           .setTimestamp());
         
-        // Reduce spam counter since message was blocked
-        if (ratingChannelLocked.messageCount > 0) {
-          ratingChannelLocked.messageCount--;
-        }
-        
-        return;
+        return; // Don't count blocked messages
       }
+    }
+    
+    // Add current message timestamp (only valid messages that weren't blocked)
+    ratingChannelLocked.messageTimestamps.push(now);
+    
+    // Check for spam wave (too many messages in short time)
+    if (ratingChannelLocked.messageTimestamps.length >= spamThreshold && !ratingChannelLocked.locked) {
+      ratingChannelLocked.locked = true;
+      ratingChannelLocked.lastLockTime = now;
+      
+      await sendLog(new EmbedBuilder()
+        .setTitle('🚨 Rating Channel Locked - Spam Wave Detected')
+        .setDescription(`The rating channel has been temporarily locked due to spam.\n**Messages in 10s:** ${ratingChannelLocked.messageTimestamps.length}\nChannel will unlock automatically in 30 seconds.`)
+        .setColor('#ff0000')
+        .setTimestamp());
+      
+      // Auto-unlock after lock duration
+      if (ratingChannelLocked.resetTimeout) clearTimeout(ratingChannelLocked.resetTimeout);
+      ratingChannelLocked.resetTimeout = setTimeout(() => {
+        ratingChannelLocked.locked = false;
+        ratingChannelLocked.messageTimestamps = [];
+        sendLog(new EmbedBuilder()
+          .setTitle('✅ Rating Channel Unlocked')
+          .setDescription('The rating channel has been unlocked. Normal operations resumed.')
+          .setColor('#00ff00')
+          .setTimestamp());
+      }, lockDuration);
     }
   }
 
