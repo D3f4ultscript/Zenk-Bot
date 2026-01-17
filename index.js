@@ -191,10 +191,10 @@ const addExp = async (userId, guildId, amount, reason = 'message') => {
   // Cooldown: 30 seconds for messages, 60 seconds for reactions
   const now = Date.now();
   if (reason === 'message') {
-    if (now - levels[key].lastMessage < 30000) return; // 30s cooldown
+    if (now - levels[key].lastMessage < 30000) return { skipped: true }; // 30s cooldown
     levels[key].lastMessage = now;
   } else if (reason === 'reaction') {
-    if (now - levels[key].lastReaction < 60000) return; // 60s cooldown
+    if (now - levels[key].lastReaction < 60000) return { skipped: true }; // 60s cooldown
     levels[key].lastReaction = now;
   }
   
@@ -209,6 +209,7 @@ const addExp = async (userId, guildId, amount, reason = 'message') => {
   
   // Check for level up
   if (newLevel > oldLevel) {
+    console.log(`${userId} leveled up: ${oldLevel} -> ${newLevel}`);
     await handleLevelUp(userId, guildId, newLevel, oldLevel);
   }
   
@@ -219,29 +220,43 @@ const handleLevelUp = async (userId, guildId, newLevel, oldLevel) => {
   try {
     const guild = await client.guilds.fetch(guildId);
     const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) return;
+    if (!member) {
+      console.log(`Could not fetch member ${userId} in guild ${guildId}`);
+      return;
+    }
     
-    // Give role if exists
-    if (LEVEL_ROLES[newLevel]) {
-      const role = await guild.roles.fetch(LEVEL_ROLES[newLevel]).catch(() => null);
-      if (role) {
-        await member.roles.add(role, 'Level up reward').catch(() => {});
+    // Remove old level roles first
+    for (const [level, roleId] of Object.entries(LEVEL_ROLES)) {
+      if (parseInt(level) < newLevel && member.roles.cache.has(roleId)) {
+        const oldRole = await guild.roles.fetch(roleId).catch(() => null);
+        if (oldRole) {
+          await member.roles.remove(oldRole, `Level up - removed old level role`).catch((e) => {
+            console.log(`Could not remove old role ${roleId}:`, e.message);
+          });
+        }
       }
     }
     
-    // Remove old level roles (optional - only if you want to remove previous roles)
-    // You can uncomment this if you want users to keep only the highest role
-    // for (const [level, roleId] of Object.entries(LEVEL_ROLES)) {
-    //   if (parseInt(level) < newLevel && member.roles.cache.has(roleId)) {
-    //     const oldRole = await guild.roles.fetch(roleId).catch(() => null);
-    //     if (oldRole) await member.roles.remove(oldRole, 'Level up - removed old level role').catch(() => {});
-    //   }
-    // }
+    // Give new level role if exists
+    if (LEVEL_ROLES[newLevel]) {
+      const role = await guild.roles.fetch(LEVEL_ROLES[newLevel]).catch(() => null);
+      if (role) {
+        await member.roles.add(role, `Level ${newLevel} reward`).catch((e) => {
+          console.log(`Could not add role ${LEVEL_ROLES[newLevel]}:`, e.message);
+        });
+      } else {
+        console.log(`Role ${LEVEL_ROLES[newLevel]} not found for level ${newLevel}`);
+      }
+    }
     
     // Send level up message
     const levelUpChannel = await client.channels.fetch(IDS.levelUpChannel).catch(() => null);
     if (levelUpChannel) {
-      await levelUpChannel.send(`${member} leveled up to **level ${newLevel}**! 🎉`);
+      await levelUpChannel.send(`${member} **leveled up to level ${newLevel}**! 🎉`).catch((e) => {
+        console.log(`Could not send levelup message:`, e.message);
+      });
+    } else {
+      console.log(`Level up channel ${IDS.levelUpChannel} not found`);
     }
   } catch (error) {
     console.error('Error handling level up:', error);
