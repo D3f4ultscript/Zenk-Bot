@@ -72,6 +72,7 @@ const activeTickets = new Map();
 const messageHistory = new Map();
 const userSpamTracker = new Map();
 const autoClearChannels = new Map();
+const ratingChannelLocked = { locked: false, lastMessageTime: 0, messageCount: 0, resetTimeout: null };
 
 let setupConfig = {};
 let executionCount = 0;
@@ -389,35 +390,97 @@ client.on('guildMemberRemove', updateCountsChannels);
 // MESSAGE MODERATION SYSTEM
 // ==========================================
 client.on('messageCreate', async (m) => {
-  // RATING CHANNEL - STRICT @ PROTECTION (before bypass check)
+  // RATING CHANNEL - COMPLETE PROTECTION SYSTEM
   if (m.channel.id === IDS.rating) {
     const content = m.content || '';
-    const hasAtSymbol = content.includes('@');
-    const hasMention = m.mentions.users.size > 0 || m.mentions.roles.size > 0 || m.mentions.everyone || m.mentions.repliedUser;
+    const now = Date.now();
     
-    if (hasAtSymbol || hasMention) {
-      await m.delete().catch(() => {});
+    // Check if channel is locked (spam wave detected)
+    if (ratingChannelLocked.locked) {
+      // Staff can still send messages even when locked
+      if (!m.member?.roles.cache.has(IDS.staff) && !m.author.bot) {
+        await m.delete().catch(() => {});
+        return;
+      }
+    }
+    
+    // Skip bots and staff for spam detection
+    const isStaff = m.member?.roles.cache.has(IDS.staff);
+    const isBot = m.author.bot;
+    
+    if (!isStaff && !isBot) {
+      // SPAM DETECTION: Check for rapid message rate
+      const timeWindow = 10000; // 10 seconds
+      const spamThreshold = 10; // 10 messages
+      const lockDuration = 60000; // Lock for 60 seconds
       
-      // Timeout user for spam attempt
-      if (m.member?.moderatable && !m.member.roles.cache.has(IDS.staff)) {
-        try {
-          await m.member.timeout(TIMEOUTS.spam, 'Mention/At-symbol spam in rating channel');
-        } catch {}
+      if (now - ratingChannelLocked.lastMessageTime > timeWindow) {
+        // Reset counter if outside time window
+        ratingChannelLocked.messageCount = 1;
+        ratingChannelLocked.lastMessageTime = now;
+      } else {
+        ratingChannelLocked.messageCount++;
+        ratingChannelLocked.lastMessageTime = now;
       }
       
-      // Log the attempt
-      await sendLog(new EmbedBuilder()
-        .setTitle('🚫 Rating Channel Violation')
-        .addFields(
-          { name: 'User', value: `${m.author.tag} (${m.author.id})`, inline: true },
-          { name: 'Channel', value: `${m.channel}`, inline: true },
-          { name: 'Violation', value: 'Contains @ symbol or mentions', inline: true },
-          { name: 'Content', value: content.substring(0, 500) || 'No content' }
-        )
-        .setColor('#ff0000')
-        .setTimestamp());
+      // Lock channel if spam detected
+      if (ratingChannelLocked.messageCount >= spamThreshold && !ratingChannelLocked.locked) {
+        ratingChannelLocked.locked = true;
+        
+        await sendLog(new EmbedBuilder()
+          .setTitle('🚨 Rating Channel Locked - Spam Wave Detected')
+          .setDescription(`The rating channel has been temporarily locked due to spam.\n**Messages in 10s:** ${ratingChannelLocked.messageCount}`)
+          .setColor('#ff0000')
+          .setTimestamp());
+        
+        // Auto-unlock after lock duration
+        if (ratingChannelLocked.resetTimeout) clearTimeout(ratingChannelLocked.resetTimeout);
+        ratingChannelLocked.resetTimeout = setTimeout(() => {
+          ratingChannelLocked.locked = false;
+          ratingChannelLocked.messageCount = 0;
+          ratingChannelLocked.lastMessageTime = 0;
+          sendLog(new EmbedBuilder()
+            .setTitle('✅ Rating Channel Unlocked')
+            .setDescription('The rating channel has been unlocked. Normal operations resumed.')
+            .setColor('#00ff00')
+            .setTimestamp());
+        }, lockDuration);
+      }
       
-      return;
+      // BLOCK @ and / symbols
+      const hasAtSymbol = content.includes('@');
+      const hasSlashSymbol = content.includes('/');
+      const hasMention = m.mentions.users.size > 0 || m.mentions.roles.size > 0 || m.mentions.everyone || m.mentions.repliedUser;
+      
+      if (hasAtSymbol || hasSlashSymbol || hasMention) {
+        await m.delete().catch(() => {});
+        
+        // Timeout user for violation
+        if (m.member?.moderatable) {
+          try {
+            await m.member.timeout(TIMEOUTS.spam, 'Contains @ or / in rating channel');
+          } catch {}
+        }
+        
+        // Log the attempt
+        await sendLog(new EmbedBuilder()
+          .setTitle('🚫 Rating Channel Violation')
+          .addFields(
+            { name: 'User', value: `${m.author.tag} (${m.author.id})`, inline: true },
+            { name: 'Channel', value: `${m.channel}`, inline: true },
+            { name: 'Violation', value: hasAtSymbol ? 'Contains @ symbol' : hasSlashSymbol ? 'Contains / symbol' : 'Contains mentions', inline: true },
+            { name: 'Content', value: content.substring(0, 500) || 'No content' }
+          )
+          .setColor('#ff0000')
+          .setTimestamp());
+        
+        // Reduce spam counter since message was blocked
+        if (ratingChannelLocked.messageCount > 0) {
+          ratingChannelLocked.messageCount--;
+        }
+        
+        return;
+      }
     }
   }
 
