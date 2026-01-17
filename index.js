@@ -660,17 +660,18 @@ client.on('messageCreate', async (m) => {
   const now = Date.now();
   const content = m.content || '';
   
-  // DUPLICATE MESSAGE DETECTION (must be first, before any deletions)
-  if (!bypass) {
-    const senderId = m.webhookId || m.author.id;
-    const userKey = `${m.channel.id}::${senderId}`;
+  // DUPLICATE MESSAGE DETECTION - aber nicht für Webhooks (Commands)
+  if (!bypass && !m.webhookId) {
+    const userKey = `${m.channel.id}::${m.author.id}`;
     
     if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
+    // Cleanup: keep last 2 minutes
     const history = messageHistory.get(userKey).filter(h => now - h.timestamp < 120000);
     
-    const isDuplicate = history.some(h => h.content === content);
+    // Check if exact same message was sent in last 20 seconds (stricter for regular messages)
+    const recentDuplicate = history.some(h => h.content === content && now - h.timestamp < 20000);
     
-    if (isDuplicate) {
+    if (recentDuplicate) {
       await m.delete().catch(() => {});
       return;
     }
