@@ -32,7 +32,17 @@ const IDS = {
   bypass: '1453892506801541201',
   antiBypass: '1454089114348425348',
   linkAllowed2: '1454774839519875123',
-  download: '1455226125700694027'
+  download: '1455226125700694027',
+  levelUpChannel: '1462009992285786253'
+};
+
+const LEVEL_ROLES = {
+  5: '1462009324963500084',
+  10: '1462009409889632326',
+  15: '1462009434791350417',
+  20: '1462009456899526716',
+  25: '1462009479854952620',
+  30: '1462009514675929293'
 };
 
 const TIMEOUTS = { 
@@ -62,6 +72,7 @@ const PHISHING_DOMAINS = [
 // ==========================================
 const executionsFile = path.join(__dirname, 'Executions.txt');
 const setupFile = path.join(__dirname, 'Setup.json');
+const levelsFile = path.join(__dirname, 'Levels.json');
 
 // ==========================================
 // GLOBAL STATE & TRACKERS
@@ -117,6 +128,202 @@ const writeSetup = (d) => {
   try {
     fs.writeFileSync(setupFile, JSON.stringify(d, null, 2));
   } catch {}
+};
+
+// ==========================================
+// LEVEL SYSTEM HELPERS
+// ==========================================
+const readLevels = () => {
+  try {
+    if (!fs.existsSync(levelsFile)) return {};
+    return JSON.parse(fs.readFileSync(levelsFile, 'utf8'));
+  } catch {
+    return {};
+  }
+};
+
+const writeLevels = (d) => {
+  try {
+    fs.writeFileSync(levelsFile, JSON.stringify(d, null, 2));
+  } catch {}
+};
+
+// Level calculation: EXP needed for level = 100 * level^1.5
+const getExpForLevel = (level) => {
+  return Math.floor(100 * Math.pow(level, 1.5));
+};
+
+const getLevel = (exp) => {
+  let level = 1;
+  let totalExp = 0;
+  while (totalExp + getExpForLevel(level) <= exp) {
+    totalExp += getExpForLevel(level);
+    level++;
+  }
+  return level;
+};
+
+const getTotalExpForLevel = (level) => {
+  let total = 0;
+  for (let i = 1; i < level; i++) {
+    total += getExpForLevel(i);
+  }
+  return total;
+};
+
+const getExpInCurrentLevel = (exp, level) => {
+  const totalExpForCurrentLevel = getTotalExpForLevel(level);
+  return exp - totalExpForCurrentLevel;
+};
+
+const getExpNeededForNextLevel = (level) => {
+  return getExpForLevel(level);
+};
+
+const addExp = async (userId, guildId, amount, reason = 'message') => {
+  const levels = readLevels();
+  const key = `${guildId}_${userId}`;
+  
+  if (!levels[key]) {
+    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
+  }
+  
+  // Cooldown: 30 seconds for messages, 60 seconds for reactions
+  const now = Date.now();
+  if (reason === 'message') {
+    if (now - levels[key].lastMessage < 30000) return; // 30s cooldown
+    levels[key].lastMessage = now;
+  } else if (reason === 'reaction') {
+    if (now - levels[key].lastReaction < 60000) return; // 60s cooldown
+    levels[key].lastReaction = now;
+  }
+  
+  const oldExp = levels[key].exp;
+  const oldLevel = getLevel(oldExp);
+  
+  levels[key].exp += amount;
+  const newExp = levels[key].exp;
+  const newLevel = getLevel(newExp);
+  
+  writeLevels(levels);
+  
+  // Check for level up
+  if (newLevel > oldLevel) {
+    await handleLevelUp(userId, guildId, newLevel, oldLevel);
+  }
+  
+  return { exp: newExp, level: newLevel, leveledUp: newLevel > oldLevel };
+};
+
+const handleLevelUp = async (userId, guildId, newLevel, oldLevel) => {
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) return;
+    
+    // Give role if exists
+    if (LEVEL_ROLES[newLevel]) {
+      const role = await guild.roles.fetch(LEVEL_ROLES[newLevel]).catch(() => null);
+      if (role) {
+        await member.roles.add(role, 'Level up reward').catch(() => {});
+      }
+    }
+    
+    // Remove old level roles (optional - only if you want to remove previous roles)
+    // You can uncomment this if you want users to keep only the highest role
+    // for (const [level, roleId] of Object.entries(LEVEL_ROLES)) {
+    //   if (parseInt(level) < newLevel && member.roles.cache.has(roleId)) {
+    //     const oldRole = await guild.roles.fetch(roleId).catch(() => null);
+    //     if (oldRole) await member.roles.remove(oldRole, 'Level up - removed old level role').catch(() => {});
+    //   }
+    // }
+    
+    // Send level up message
+    const levelUpChannel = await client.channels.fetch(IDS.levelUpChannel).catch(() => null);
+    if (levelUpChannel) {
+      await levelUpChannel.send(`${member} leveled up to **level ${newLevel}**! 🎉`);
+    }
+  } catch (error) {
+    console.error('Error handling level up:', error);
+  }
+};
+
+const setUserExp = async (userId, guildId, exp, reason = 'Manual adjustment') => {
+  const levels = readLevels();
+  const key = `${guildId}_${userId}`;
+  
+  if (!levels[key]) {
+    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
+  }
+  
+  const oldExp = levels[key].exp;
+  const oldLevel = getLevel(oldExp);
+  
+  levels[key].exp = Math.max(0, exp); // Ensure EXP doesn't go below 0
+  const newExp = levels[key].exp;
+  const newLevel = getLevel(newExp);
+  
+  writeLevels(levels);
+  
+  // Check for level up/down and update roles
+  if (newLevel !== oldLevel) {
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (member) {
+        // Remove old level roles
+        for (const [level, roleId] of Object.entries(LEVEL_ROLES)) {
+          if (member.roles.cache.has(roleId)) {
+            const role = await guild.roles.fetch(roleId).catch(() => null);
+            if (role) await member.roles.remove(role, reason).catch(() => {});
+          }
+        }
+        
+        // Add new level role if exists
+        if (LEVEL_ROLES[newLevel]) {
+          const role = await guild.roles.fetch(LEVEL_ROLES[newLevel]).catch(() => null);
+          if (role) await member.roles.add(role, reason).catch(() => {});
+        }
+      }
+    } catch (error) {
+      console.error('Error updating roles:', error);
+    }
+  }
+  
+  return { exp: newExp, level: newLevel, oldLevel, leveledUp: newLevel > oldLevel };
+};
+
+const addUserExp = async (userId, guildId, amount) => {
+  const levels = readLevels();
+  const key = `${guildId}_${userId}`;
+  
+  if (!levels[key]) {
+    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
+  }
+  
+  const oldExp = levels[key].exp;
+  const newExp = oldExp + amount;
+  
+  return await setUserExp(userId, guildId, newExp, 'Admin added EXP');
+};
+
+const removeUserExp = async (userId, guildId, amount) => {
+  const levels = readLevels();
+  const key = `${guildId}_${userId}`;
+  
+  if (!levels[key]) {
+    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
+  }
+  
+  const oldExp = levels[key].exp;
+  const newExp = Math.max(0, oldExp - amount);
+  
+  return await setUserExp(userId, guildId, newExp, 'Admin removed EXP');
+};
+
+const setUserLevel = async (userId, guildId, targetLevel) => {
+  const totalExp = getTotalExpForLevel(targetLevel);
+  return await setUserExp(userId, guildId, totalExp, `Admin set level to ${targetLevel}`);
 };
 
 // ==========================================
@@ -367,7 +574,30 @@ client.once('ready', async () => {
     
     new SlashCommandBuilder()
       .setName('unlock')
-      .setDescription('Unlock the channel')
+      .setDescription('Unlock the channel'),
+    
+    new SlashCommandBuilder()
+      .setName('level')
+      .setDescription('Check your level and experience')
+      .addUserOption(o => o.setName('user').setDescription('Check another user\'s level').setRequired(false)),
+    
+    new SlashCommandBuilder()
+      .setName('addexp')
+      .setDescription('Add EXP to a user (Admin only)')
+      .addUserOption(o => o.setName('user').setDescription('User to add EXP to').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setDescription('Amount of EXP to add').setRequired(true).setMinValue(1)),
+    
+    new SlashCommandBuilder()
+      .setName('removeexp')
+      .setDescription('Remove EXP from a user (Admin only)')
+      .addUserOption(o => o.setName('user').setDescription('User to remove EXP from').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setDescription('Amount of EXP to remove').setRequired(true).setMinValue(1)),
+    
+    new SlashCommandBuilder()
+      .setName('setlevel')
+      .setDescription('Set a user\'s level (Admin only)')
+      .addUserOption(o => o.setName('user').setDescription('User to set level for').setRequired(true))
+      .addIntegerOption(o => o.setName('level').setDescription('Level to set').setRequired(true).setMinValue(1))
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -686,6 +916,12 @@ client.on('messageCreate', async (m) => {
         .setTimestamp());
     }
   } catch {}
+  
+  // LEVEL SYSTEM: Add EXP for messages (skip bots, webhooks, DMs)
+  if (m.guild && !m.author.bot && !m.webhookId) {
+    const expAmount = Math.floor(Math.random() * 15) + 15; // 15-30 EXP per message
+    await addExp(m.author.id, m.guild.id, expAmount, 'message').catch(() => {});
+  }
 });
 
 // ==========================================
@@ -697,6 +933,31 @@ client.on('webhookUpdate', async (c) => {
     whs.forEach(async (wh) => {
       if (wh.name !== 'Zenk') await wh.edit({ name: 'Zenk' });
     });
+  } catch {}
+});
+
+// ==========================================
+// MESSAGE REACTION EVENTS - LEVEL SYSTEM
+// ==========================================
+client.on('messageReactionAdd', async (reaction, user) => {
+  try {
+    // Skip bots and reactions on bot messages in non-guild channels
+    if (user.bot || !reaction.message.guild) return;
+    
+    // Get the full message and member
+    const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+    const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
+    if (!member) return;
+    
+    // Don't give EXP for reacting to own messages
+    if (message.author.id === user.id) return;
+    
+    // Don't give EXP if message author is a bot
+    if (message.author.bot) return;
+    
+    // Add EXP for reaction (cooldown handled in addExp)
+    const expAmount = Math.floor(Math.random() * 10) + 10; // 10-20 EXP per reaction
+    await addExp(user.id, reaction.message.guild.id, expAmount, 'reaction').catch(() => {});
   } catch {}
 });
 
@@ -945,6 +1206,161 @@ client.on('interactionCreate', async (i) => {
           .setTimestamp());
       } catch (error) {
         await i.reply({ content: 'Failed to unlock channel', ephemeral: true });
+      }
+    }
+
+    // SLASH COMMAND: LEVEL
+    else if (i.isChatInputCommand() && i.commandName === 'level') {
+      try {
+        const targetUser = i.options.getUser('user') || i.user;
+        const levels = readLevels();
+        const key = `${i.guild.id}_${targetUser.id}`;
+        
+        if (!levels[key] || !levels[key].exp) {
+          const exp = 0;
+          const level = 1;
+          const expInLevel = 0;
+          const expNeeded = getExpNeededForNextLevel(level);
+          
+          await i.reply({
+            embeds: [new EmbedBuilder()
+              .setTitle(`${targetUser.tag}'s Level`)
+              .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+              .addFields(
+                { name: 'Level', value: `${level}`, inline: true },
+                { name: 'Experience', value: `${exp}`, inline: true },
+                { name: 'EXP to Next Level', value: `${expNeeded}`, inline: true }
+              )
+              .setColor('#5865F2')
+              .setTimestamp()]
+          });
+          return;
+        }
+        
+        const exp = levels[key].exp;
+        const level = getLevel(exp);
+        const expInLevel = getExpInCurrentLevel(exp, level);
+        const expNeeded = getExpNeededForNextLevel(level);
+        const progressBarLength = 20;
+        const progress = Math.floor((expInLevel / expNeeded) * progressBarLength);
+        const progressBar = '█'.repeat(progress) + '░'.repeat(progressBarLength - progress);
+        
+        await i.reply({
+          embeds: [new EmbedBuilder()
+            .setTitle(`${targetUser.tag}'s Level`)
+            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+            .addFields(
+              { name: 'Level', value: `${level}`, inline: true },
+              { name: 'Total Experience', value: `${exp.toLocaleString()}`, inline: true },
+              { name: 'EXP Progress', value: `${expInLevel}/${expNeeded}`, inline: true },
+              { name: 'Progress Bar', value: `${progressBar} ${Math.floor((expInLevel / expNeeded) * 100)}%`, inline: false }
+            )
+            .setColor('#5865F2')
+            .setTimestamp()]
+        });
+      } catch (error) {
+        await i.reply({ content: 'Failed to get level information', ephemeral: true });
+      }
+    }
+
+    // SLASH COMMAND: ADDEXP
+    else if (i.isChatInputCommand() && i.commandName === 'addexp') {
+      if (!i.member.roles.cache.has(IDS.bypass)) {
+        return i.reply({ content: 'No permissions. You need the bypass role.', ephemeral: true });
+      }
+      
+      try {
+        const targetUser = i.options.getUser('user');
+        const amount = i.options.getInteger('amount');
+        
+        const result = await addUserExp(targetUser.id, i.guild.id, amount);
+        const levelChange = result.leveledUp ? ` (Leveled up from ${result.oldLevel} to ${result.level}!)` : '';
+        
+        await i.reply({ 
+          content: `Added ${amount} EXP to ${targetUser.tag}. New EXP: ${result.exp.toLocaleString()} (Level ${result.level})${levelChange}`,
+          ephemeral: true 
+        });
+        
+        await sendLog(new EmbedBuilder()
+          .setTitle('➕ EXP Added')
+          .addFields(
+            { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: true },
+            { name: 'Amount', value: `${amount}`, inline: true },
+            { name: 'New EXP', value: `${result.exp.toLocaleString()}`, inline: true },
+            { name: 'New Level', value: `${result.level}`, inline: true },
+            { name: 'Admin', value: i.user.tag }
+          )
+          .setColor('#00ff00')
+          .setTimestamp());
+      } catch (error) {
+        await i.reply({ content: 'Failed to add EXP', ephemeral: true });
+      }
+    }
+
+    // SLASH COMMAND: REMOVEEXP
+    else if (i.isChatInputCommand() && i.commandName === 'removeexp') {
+      if (!i.member.roles.cache.has(IDS.bypass)) {
+        return i.reply({ content: 'No permissions. You need the bypass role.', ephemeral: true });
+      }
+      
+      try {
+        const targetUser = i.options.getUser('user');
+        const amount = i.options.getInteger('amount');
+        
+        const result = await removeUserExp(targetUser.id, i.guild.id, amount);
+        const levelChange = result.level < result.oldLevel ? ` (Leveled down from ${result.oldLevel} to ${result.level}!)` : '';
+        
+        await i.reply({ 
+          content: `Removed ${amount} EXP from ${targetUser.tag}. New EXP: ${result.exp.toLocaleString()} (Level ${result.level})${levelChange}`,
+          ephemeral: true 
+        });
+        
+        await sendLog(new EmbedBuilder()
+          .setTitle('➖ EXP Removed')
+          .addFields(
+            { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: true },
+            { name: 'Amount', value: `${amount}`, inline: true },
+            { name: 'New EXP', value: `${result.exp.toLocaleString()}`, inline: true },
+            { name: 'New Level', value: `${result.level}`, inline: true },
+            { name: 'Admin', value: i.user.tag }
+          )
+          .setColor('#ffa500')
+          .setTimestamp());
+      } catch (error) {
+        await i.reply({ content: 'Failed to remove EXP', ephemeral: true });
+      }
+    }
+
+    // SLASH COMMAND: SETLEVEL
+    else if (i.isChatInputCommand() && i.commandName === 'setlevel') {
+      if (!i.member.roles.cache.has(IDS.bypass)) {
+        return i.reply({ content: 'No permissions. You need the bypass role.', ephemeral: true });
+      }
+      
+      try {
+        const targetUser = i.options.getUser('user');
+        const targetLevel = i.options.getInteger('level');
+        
+        const result = await setUserLevel(targetUser.id, i.guild.id, targetLevel);
+        
+        await i.reply({ 
+          content: `Set ${targetUser.tag}'s level to ${targetLevel}. EXP: ${result.exp.toLocaleString()} (was Level ${result.oldLevel})`,
+          ephemeral: true 
+        });
+        
+        await sendLog(new EmbedBuilder()
+          .setTitle('⚙️ Level Set')
+          .addFields(
+            { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: true },
+            { name: 'New Level', value: `${targetLevel}`, inline: true },
+            { name: 'Old Level', value: `${result.oldLevel}`, inline: true },
+            { name: 'New EXP', value: `${result.exp.toLocaleString()}`, inline: true },
+            { name: 'Admin', value: i.user.tag }
+          )
+          .setColor('#5865F2')
+          .setTimestamp());
+      } catch (error) {
+        await i.reply({ content: 'Failed to set level', ephemeral: true });
       }
     }
 
