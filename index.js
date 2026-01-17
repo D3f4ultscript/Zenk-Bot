@@ -395,10 +395,32 @@ client.on('guildMemberRemove', updateCountsChannels);
 // MESSAGE MODERATION SYSTEM
 // ==========================================
 client.on('messageCreate', async (m) => {
+  const bypass = checkBypass(m);
+  const now = Date.now();
+  const content = m.content || '';
+  
+  // DUPLICATE MESSAGE DETECTION (must be first, before any deletions)
+  if (!bypass) {
+    const senderId = m.webhookId || m.author.id;
+    const userKey = `${m.channel.id}::${senderId}`;
+    
+    if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
+    const history = messageHistory.get(userKey).filter(h => now - h.timestamp < 120000);
+    
+    const isDuplicate = history.some(h => h.content === content);
+    
+    if (isDuplicate) {
+      await m.delete().catch(() => {});
+      return;
+    }
+    
+    // Add to history only if not duplicate and not bypass
+    history.push({ content, timestamp: now, messageId: m.id });
+    messageHistory.set(userKey, history);
+  }
+
   // RATING CHANNEL - COMPLETE PROTECTION SYSTEM
   if (m.channel.id === IDS.rating) {
-    const content = m.content || '';
-    const now = Date.now();
     const isStaff = m.member?.roles.cache.has(IDS.staff);
     const isBot = m.author.bot;
     
@@ -483,8 +505,6 @@ client.on('messageCreate', async (m) => {
     }
   }
 
-  const bypass = checkBypass(m);
-
   // AUTOCLEAR SYSTEM
   if (autoClearChannels.has(m.channelId) && !bypass) {
     await m.delete().catch(() => {});
@@ -492,26 +512,7 @@ client.on('messageCreate', async (m) => {
   }
 
   try {
-    const now = Date.now();
-    const content = m.content || '';
     const contentLower = content.toLowerCase();
-
-    // DUPLICATE MESSAGE DETECTION
-    const senderId = m.webhookId || m.author.id;
-    const userKey = `${m.channel.id}::${senderId}`;
-    
-    if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
-    const history = messageHistory.get(userKey).filter(h => now - h.timestamp < 120000);
-    
-    const isDuplicate = history.some(h => h.content === content);
-    
-    if (isDuplicate && !bypass) {
-      await m.delete().catch(() => {});
-      return;
-    }
-    
-    history.push({ content, timestamp: now, messageId: m.id });
-    messageHistory.set(userKey, history);
 
     // IGNORE NON-WEBHOOK BOTS
     if (m.author.bot && !m.webhookId) return;
