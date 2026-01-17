@@ -353,7 +353,15 @@ client.once('ready', async () => {
     
     new SlashCommandBuilder()
       .setName('autoclearoff')
-      .setDescription('Stop auto-clearing messages in this channel')
+      .setDescription('Stop auto-clearing messages in this channel'),
+    
+    new SlashCommandBuilder()
+      .setName('lock')
+      .setDescription('Lock the channel so only staff can write'),
+    
+    new SlashCommandBuilder()
+      .setName('unlock')
+      .setDescription('Unlock the channel')
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -796,6 +804,62 @@ client.on('interactionCreate', async (i) => {
           'AutoClear is not active', 
         ephemeral: true 
       });
+    }
+
+    // SLASH COMMAND: LOCK
+    else if (i.isChatInputCommand() && i.commandName === 'lock') {
+      if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        return i.reply({ content: 'No permissions', ephemeral: true });
+      }
+      
+      try {
+        const channel = i.channel;
+        await channel.permissionOverwrites.edit(i.guild.id, {
+          SendMessages: false
+        });
+        
+        await channel.permissionOverwrites.edit(IDS.staff, {
+          SendMessages: true
+        });
+        
+        await i.reply({ content: '🔒 Channel locked! Only staff can write.', ephemeral: true });
+        await sendLog(new EmbedBuilder()
+          .setTitle('🔒 Channel Locked')
+          .addFields(
+            { name: 'Channel', value: `${channel}`, inline: true },
+            { name: 'Locked By', value: i.user.tag, inline: true }
+          )
+          .setColor('#ffa500')
+          .setTimestamp());
+      } catch (error) {
+        await i.reply({ content: 'Failed to lock channel', ephemeral: true });
+      }
+    }
+
+    // SLASH COMMAND: UNLOCK
+    else if (i.isChatInputCommand() && i.commandName === 'unlock') {
+      if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        return i.reply({ content: 'No permissions', ephemeral: true });
+      }
+      
+      try {
+        const channel = i.channel;
+        await channel.permissionOverwrites.edit(i.guild.id, {
+          SendMessages: null
+        });
+        
+        await i.reply({ content: '🔓 Channel unlocked! Everyone can write again.', ephemeral: true });
+        await sendLog(new EmbedBuilder()
+          .setTitle('🔓 Channel Unlocked')
+          .addFields(
+            { name: 'Channel', value: `${channel}`, inline: true },
+            { name: 'Unlocked By', value: i.user.tag, inline: true }
+          )
+          .setColor('#00ff00')
+          .setTimestamp());
+      } catch (error) {
+        await i.reply({ content: 'Failed to unlock channel', ephemeral: true });
+      }
     }
 
     // TICKET SELECT MENU
