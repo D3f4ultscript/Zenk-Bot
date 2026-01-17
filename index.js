@@ -725,29 +725,7 @@ client.on('messageCreate', async (m) => {
     // Add current message timestamp (only valid messages that weren't blocked)
     ratingChannelLocked.messageTimestamps.push(now);
     
-    // Check for spam wave (too many messages in short time)
-    if (ratingChannelLocked.messageTimestamps.length >= spamThreshold && !ratingChannelLocked.locked) {
-      ratingChannelLocked.locked = true;
-      ratingChannelLocked.lastLockTime = now;
-      
-      await sendLog(new EmbedBuilder()
-        .setTitle('🚨 Rating Channel Locked - Spam Wave Detected')
-        .setDescription(`The rating channel has been temporarily locked due to spam.\n**Messages in 10s:** ${ratingChannelLocked.messageTimestamps.length}\nChannel will unlock automatically in 30 seconds.`)
-        .setColor('#ff0000')
-        .setTimestamp());
-      
-      // Auto-unlock after lock duration
-      if (ratingChannelLocked.resetTimeout) clearTimeout(ratingChannelLocked.resetTimeout);
-      ratingChannelLocked.resetTimeout = setTimeout(() => {
-        ratingChannelLocked.locked = false;
-        ratingChannelLocked.messageTimestamps = [];
-        sendLog(new EmbedBuilder()
-          .setTitle('✅ Rating Channel Unlocked')
-          .setDescription('The rating channel has been unlocked. Normal operations resumed.')
-          .setColor('#00ff00')
-          .setTimestamp());
-      }, lockDuration);
-    }
+    // Spam wave detection disabled - no auto-lock
   }
 
   // AUTOCLEAR SYSTEM
@@ -1247,7 +1225,8 @@ client.on('interactionCreate', async (i) => {
                 { name: 'EXP to Next Level', value: `${expNeeded}`, inline: true }
               )
               .setColor('#5865F2')
-              .setTimestamp()]
+              .setTimestamp()],
+            ephemeral: true
           });
           return;
         }
@@ -1271,7 +1250,8 @@ client.on('interactionCreate', async (i) => {
               { name: 'Progress Bar', value: `${progressBar} ${Math.floor((expInLevel / expNeeded) * 100)}%`, inline: false }
             )
             .setColor('#5865F2')
-            .setTimestamp()]
+            .setTimestamp()],
+          ephemeral: true
         });
       } catch (error) {
         await i.reply({ content: 'Failed to get level information', ephemeral: true });
