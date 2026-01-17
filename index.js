@@ -188,13 +188,13 @@ const addExp = async (userId, guildId, amount, reason = 'message') => {
     levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
   }
   
-  // Cooldown: 30 seconds for messages, 60 seconds for reactions
+  // Cooldown: 5 seconds for messages, 30 seconds for reactions
   const now = Date.now();
   if (reason === 'message') {
-    if (now - levels[key].lastMessage < 30000) return { skipped: true }; // 30s cooldown
+    if (now - levels[key].lastMessage < 5000) return { skipped: true }; // 5s cooldown
     levels[key].lastMessage = now;
   } else if (reason === 'reaction') {
-    if (now - levels[key].lastReaction < 60000) return { skipped: true }; // 60s cooldown
+    if (now - levels[key].lastReaction < 30000) return { skipped: true }; // 30s cooldown
     levels[key].lastReaction = now;
   }
   
@@ -1225,8 +1225,7 @@ client.on('interactionCreate', async (i) => {
                 { name: 'EXP to Next Level', value: `${expNeeded}`, inline: true }
               )
               .setColor('#5865F2')
-              .setTimestamp()],
-            ephemeral: true
+              .setTimestamp()]
           });
           return;
         }
@@ -1250,8 +1249,7 @@ client.on('interactionCreate', async (i) => {
               { name: 'Progress Bar', value: `${progressBar} ${Math.floor((expInLevel / expNeeded) * 100)}%`, inline: false }
             )
             .setColor('#5865F2')
-            .setTimestamp()],
-          ephemeral: true
+            .setTimestamp()]
         });
       } catch (error) {
         await i.reply({ content: 'Failed to get level information', ephemeral: true });
