@@ -640,6 +640,22 @@ client.on('guildMemberRemove', updateCountsChannels);
 // MESSAGE MODERATION SYSTEM
 // ==========================================
 client.on('messageCreate', async (m) => {
+  // LEVEL SYSTEM: Add EXP for messages FIRST - before any other processing (skip bots, webhooks, DMs)
+  if (m.guild && !m.author.bot && !m.webhookId) {
+    try {
+      const expAmount = Math.floor(Math.random() * 15) + 15; // 15-30 EXP per message
+      const result = await addExp(m.author.id, m.guild.id, expAmount, 'message').catch(e => {
+        console.error(`Error adding EXP to ${m.author.id}:`, e);
+        return null;
+      });
+      if (result && !result.skipped) {
+        console.log(`✓ ${m.author.tag} gained ${expAmount} EXP (Total: ${result.exp}, Level: ${result.level})`);
+      }
+    } catch (e) {
+      console.error('Error in EXP system:', e);
+    }
+  }
+
   const bypass = checkBypass(m);
   const now = Date.now();
   const content = m.content || '';
@@ -909,12 +925,6 @@ client.on('messageCreate', async (m) => {
         .setTimestamp());
     }
   } catch {}
-  
-  // LEVEL SYSTEM: Add EXP for messages (skip bots, webhooks, DMs)
-  if (m.guild && !m.author.bot && !m.webhookId) {
-    const expAmount = Math.floor(Math.random() * 15) + 15; // 15-30 EXP per message
-    await addExp(m.author.id, m.guild.id, expAmount, 'message').catch(() => {});
-  }
 });
 
 // ==========================================
@@ -1205,6 +1215,8 @@ client.on('interactionCreate', async (i) => {
     // SLASH COMMAND: LEVEL
     else if (i.isChatInputCommand() && i.commandName === 'level') {
       try {
+        await i.deferReply();
+        
         const targetUser = i.options.getUser('user') || i.user;
         const levels = readLevels();
         const key = `${i.guild.id}_${targetUser.id}`;
@@ -1215,7 +1227,7 @@ client.on('interactionCreate', async (i) => {
           const expInLevel = 0;
           const expNeeded = getExpNeededForNextLevel(level);
           
-          await i.reply({
+          await i.editReply({
             embeds: [new EmbedBuilder()
               .setTitle(`${targetUser.tag}'s Level`)
               .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
@@ -1238,7 +1250,7 @@ client.on('interactionCreate', async (i) => {
         const progress = Math.floor((expInLevel / expNeeded) * progressBarLength);
         const progressBar = '█'.repeat(progress) + '░'.repeat(progressBarLength - progress);
         
-        await i.reply({
+        await i.editReply({
           embeds: [new EmbedBuilder()
             .setTitle(`${targetUser.tag}'s Level`)
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
@@ -1252,7 +1264,8 @@ client.on('interactionCreate', async (i) => {
             .setTimestamp()]
         });
       } catch (error) {
-        await i.reply({ content: 'Failed to get level information', ephemeral: true });
+        console.error('Error in /level command:', error);
+        await i.editReply({ content: 'Failed to get level information' }).catch(() => {});
       }
     }
 
