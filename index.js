@@ -389,16 +389,39 @@ client.on('guildMemberRemove', updateCountsChannels);
 // MESSAGE MODERATION SYSTEM
 // ==========================================
 client.on('messageCreate', async (m) => {
-  const bypass = checkBypass(m);
-
-  // RATING CHANNEL - MENTION PROTECTION
+  // RATING CHANNEL - STRICT @ PROTECTION (before bypass check)
   if (m.channel.id === IDS.rating) {
-    const hasMention = /<@[!&]?\d+>/.test(m.content) || m.mentions.everyone;
-    if (hasMention) {
+    const content = m.content || '';
+    const hasAtSymbol = content.includes('@');
+    const hasMention = m.mentions.users.size > 0 || m.mentions.roles.size > 0 || m.mentions.everyone || m.mentions.repliedUser;
+    
+    if (hasAtSymbol || hasMention) {
       await m.delete().catch(() => {});
+      
+      // Timeout user for spam attempt
+      if (m.member?.moderatable && !m.member.roles.cache.has(IDS.staff)) {
+        try {
+          await m.member.timeout(TIMEOUTS.spam, 'Mention/At-symbol spam in rating channel');
+        } catch {}
+      }
+      
+      // Log the attempt
+      await sendLog(new EmbedBuilder()
+        .setTitle('🚫 Rating Channel Violation')
+        .addFields(
+          { name: 'User', value: `${m.author.tag} (${m.author.id})`, inline: true },
+          { name: 'Channel', value: `${m.channel}`, inline: true },
+          { name: 'Violation', value: 'Contains @ symbol or mentions', inline: true },
+          { name: 'Content', value: content.substring(0, 500) || 'No content' }
+        )
+        .setColor('#ff0000')
+        .setTimestamp());
+      
       return;
     }
   }
+
+  const bypass = checkBypass(m);
 
   // AUTOCLEAR SYSTEM
   if (autoClearChannels.has(m.channelId) && !bypass) {
