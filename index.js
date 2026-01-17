@@ -867,63 +867,7 @@ client.on('messageCreate', async (m) => {
       return;
     }
 
-    // WEBHOOK MODERATION
-    const wId = m.webhookId;
-    
-    // WEBHOOK COOLDOWN CHECK
-    if (webhookCooldown.has(wId) && now < webhookCooldown.get(wId)) {
-      return m.delete().catch(() => {});
-    }
-
-    // WEBHOOK NAME ENFORCEMENT
-    if (m.author.username !== 'Zenk') {
-      await m.delete().catch(() => {});
-      await restoreWebhook(wId, m.channelId);
-      await sendLog(new EmbedBuilder()
-        .setTitle('⚠️ Webhook Name Violation')
-        .addFields(
-          { name: 'Webhook', value: m.author.username, inline: true },
-          { name: 'ID', value: wId, inline: true }
-        )
-        .setColor('#ff0000')
-        .setTimestamp());
-      return;
-    }
-
-    // WEBHOOK BLACKLIST CHECK
-    if (checkMsg(m)) {
-      await m.delete().catch(() => {});
-      await sendLog(new EmbedBuilder()
-        .setTitle('🚫 Webhook Blacklist')
-        .addFields(
-          { name: 'Webhook', value: m.author.username, inline: true },
-          { name: 'Content', value: content.substring(0, 1024) || 'No content' }
-        )
-        .setColor('#ff0000')
-        .setTimestamp());
-      return;
-    }
-
-    // WEBHOOK RATE LIMITING
-    if (!webhookTracker.has(wId)) webhookTracker.set(wId, []);
-    const list = webhookTracker.get(wId);
-    list.push({ timestamp: now, messageId: m.id });
-    const recent = list.filter(x => now - x.timestamp < 8000);
-    webhookTracker.set(wId, recent);
-
-    if (recent.length >= 10) {
-      await bulkDelete(m.channel, recent.map(x => x.messageId));
-      webhookCooldown.set(wId, now + 30000);
-      webhookTracker.set(wId, []);
-      await sendLog(new EmbedBuilder()
-        .setTitle('⚡ Webhook Rate Limit')
-        .addFields(
-          { name: 'Webhook', value: m.author.username, inline: true },
-          { name: 'Messages', value: `${recent.length}`, inline: true }
-        )
-        .setColor('#ffa500')
-        .setTimestamp());
-    }
+    // Webhooks sind erlaubt - keine Filterung
   } catch {}
 });
 
