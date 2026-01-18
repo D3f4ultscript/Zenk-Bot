@@ -6,6 +6,8 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const { MongoClient } = require('mongodb');
+require('dotenv').config();
 
 const client = new Client({ 
   intents: [
@@ -20,6 +22,51 @@ const client = new Client({
 
 const app = express();
 app.use(express.json());
+
+// ==========================================
+// MONGODB CONNECTION
+// ==========================================
+const mongoUri = process.env.MONGODB_URI;
+let mongoClient = null;
+let db = null;
+
+const connectMongoDB = async () => {
+  try {
+    if (mongoClient) return; // Already connected
+    mongoClient = new MongoClient(mongoUri);
+    await mongoClient.connect();
+    db = mongoClient.db('zenk_bot');
+    console.log('✅ MongoDB connected');
+  } catch (error) {
+    console.error('❌ MongoDB connection error:', error.message);
+  }
+};
+
+const saveUserData = async (userId, guildId, xp, level) => {
+  if (!db) return;
+  try {
+    const collection = db.collection('users');
+    await collection.updateOne(
+      { userId, guildId },
+      { $set: { xp, level, lastUpdated: new Date() } },
+      { upsert: true }
+    );
+  } catch (error) {
+    console.error('Error saving user data:', error.message);
+  }
+};
+
+const getUserData = async (userId, guildId) => {
+  if (!db) return { xp: 0, level: 1 };
+  try {
+    const collection = db.collection('users');
+    const user = await collection.findOne({ userId, guildId });
+    return user || { xp: 0, level: 1 };
+  } catch (error) {
+    console.error('Error getting user data:', error.message);
+    return { xp: 0, level: 1 };
+  }
+};
 
 // ==========================================
 // CONFIGURATION & IDS
@@ -123,7 +170,23 @@ const writeSetup = (d) => {
 // ==========================================
 // LEVEL SYSTEM HELPERS
 // ==========================================
-const readLevels = () => {
+const readLevels = async () => {
+  // Try MongoDB first
+  if (db) {
+    try {
+      const collection = db.collection('userLevels');
+      const docs = await collection.find({}).toArray();
+      const result = {};
+      for (const doc of docs) {
+        result[doc.key] = { exp: doc.exp, lastMessage: doc.lastMessage, lastReaction: doc.lastReaction };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error reading levels from MongoDB:', error.message);
+    }
+  }
+  
+  // Fallback to file
   try {
     if (!fs.existsSync(levelsFile)) return {};
     return JSON.parse(fs.readFileSync(levelsFile, 'utf8'));
@@ -132,7 +195,24 @@ const readLevels = () => {
   }
 };
 
-const writeLevels = (d) => {
+const writeLevels = async (d) => {
+  // Save to MongoDB if available
+  if (db) {
+    try {
+      const collection = db.collection('userLevels');
+      for (const [key, data] of Object.entries(d)) {
+        await collection.updateOne(
+          { key },
+          { $set: { exp: data.exp, lastMessage: data.lastMessage, lastReaction: data.lastReaction } },
+          { upsert: true }
+        );
+      }
+    } catch (error) {
+      console.error('Error writing levels to MongoDB:', error.message);
+    }
+  }
+  
+  // Also save to file for backup
   try {
     fs.writeFileSync(levelsFile, JSON.stringify(d, null, 2));
   } catch {}
@@ -171,7 +251,7 @@ const getExpNeededForNextLevel = (level) => {
 };
 
 const addExp = async (userId, guildId, amount, reason = 'message') => {
-  const levels = readLevels();
+  const levels = await readLevels();
   const key = `${guildId}_${userId}`;
   
   if (!levels[key]) {
@@ -195,7 +275,8 @@ const addExp = async (userId, guildId, amount, reason = 'message') => {
   const newExp = levels[key].exp;
   const newLevel = getLevel(newExp);
   
-  writeLevels(levels);
+  await writeLevels(levels);
+  await saveUserData(userId, guildId, newExp, newLevel);
   
   // Check for level up
   if (newLevel > oldLevel) {
@@ -254,7 +335,7 @@ const handleLevelUp = async (userId, guildId, newLevel, oldLevel) => {
 };
 
 const setUserExp = async (userId, guildId, exp, reason = 'Manual adjustment') => {
-  const levels = readLevels();
+  const levels = await readLevels();
   const key = `${guildId}_${userId}`;
   
   if (!levels[key]) {
@@ -268,7 +349,8 @@ const setUserExp = async (userId, guildId, exp, reason = 'Manual adjustment') =>
   const newExp = levels[key].exp;
   const newLevel = getLevel(newExp);
   
-  writeLevels(levels);
+  await writeLevels(levels);
+  await saveUserData(userId, guildId, newExp, newLevel);
   
   // Check for level up/down and update roles
   if (newLevel !== oldLevel) {
@@ -528,6 +610,7 @@ const stopAutoClear = (cId) => {
 // ==========================================
 client.once('ready', async () => {
   console.log('Bot ready');
+  await connectMongoDB(); // Connect to MongoDB
   setupConfig = readSetup();
   executionCount = readExecutions();
   await updateCountsChannels();
