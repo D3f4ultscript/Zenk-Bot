@@ -27,12 +27,10 @@ app.use(express.json());
 const IDS = {
   staff: '1454608694850486313',
   log: '1456977089864400970',
-  rating: '1454624341248708649',
   tradeExcluded: '1455105607332925553',
   bypass: '1453892506801541201',
   antiBypass: '1454089114348425348',
   linkAllowed2: '1454774839519875123',
-  download: '1455226125700694027',
   levelUpChannel: '1462009992285786253'
 };
 
@@ -83,17 +81,9 @@ const activeTickets = new Map();
 const messageHistory = new Map();
 const userSpamTracker = new Map();
 const autoClearChannels = new Map();
-const ratingChannelLocked = { 
-  locked: false, 
-  messageTimestamps: [], 
-  resetTimeout: null,
-  lastLockTime: 0
-};
-
 let setupConfig = {};
 let executionCount = 0;
 let memberCount = 0;
-let downloadCount = 0;
 let lastUpdate = 0;
 
 // ==========================================
@@ -681,70 +671,6 @@ client.on('messageCreate', async (m) => {
     messageHistory.set(userKey, history);
   }
 
-  // RATING CHANNEL - COMPLETE PROTECTION SYSTEM
-  if (m.channel.id === IDS.rating) {
-    const isStaff = m.member?.roles.cache.has(IDS.staff);
-    const isBot = m.author.bot;
-    
-    // SPAM DETECTION: Track ALL messages in rating channel
-    const timeWindow = 10000; // 10 seconds
-    const spamThreshold = 8; // 8 messages trigger lock
-    const lockDuration = 30000; // Lock for 30 seconds
-    
-    // Clean old timestamps (older than timeWindow)
-    ratingChannelLocked.messageTimestamps = ratingChannelLocked.messageTimestamps.filter(
-      ts => now - ts < timeWindow
-    );
-    
-    // If channel is locked, block all non-staff messages immediately
-    if (ratingChannelLocked.locked) {
-      if (!isStaff && !isBot) {
-        await m.delete().catch(() => {});
-        return; // Don't count blocked messages
-      }
-      // Staff messages during lock - don't count for spam detection
-      return;
-    }
-    
-    // Only check @ and / for non-staff, non-bot messages BEFORE counting
-    if (!isStaff && !isBot) {
-      // BLOCK @ and / symbols
-      const hasAtSymbol = content.includes('@');
-      const hasSlashSymbol = content.includes('/');
-      const hasMention = m.mentions.users.size > 0 || m.mentions.roles.size > 0 || m.mentions.everyone || m.mentions.repliedUser;
-      
-      if (hasAtSymbol || hasSlashSymbol || hasMention) {
-        await m.delete().catch(() => {});
-        
-        // Timeout user for violation
-        if (m.member?.moderatable) {
-          try {
-            await m.member.timeout(TIMEOUTS.spam, 'Contains @ or / in rating channel');
-          } catch {}
-        }
-        
-        // Log the attempt
-        await sendLog(new EmbedBuilder()
-          .setTitle('🚫 Rating Channel Violation')
-          .addFields(
-            { name: 'User', value: `${m.author.tag} (${m.author.id})`, inline: true },
-            { name: 'Channel', value: `${m.channel}`, inline: true },
-            { name: 'Violation', value: hasAtSymbol ? 'Contains @ symbol' : hasSlashSymbol ? 'Contains / symbol' : 'Contains mentions', inline: true },
-            { name: 'Content', value: content.substring(0, 500) || 'No content' }
-          )
-          .setColor('#ff0000')
-          .setTimestamp());
-        
-        return; // Don't count blocked messages
-      }
-    }
-    
-    // Add current message timestamp (only valid messages that weren't blocked)
-    ratingChannelLocked.messageTimestamps.push(now);
-    
-    // Spam wave detection disabled - no auto-lock
-  }
-
   // AUTOCLEAR SYSTEM
   if (autoClearChannels.has(m.channelId) && !bypass) {
     await m.delete().catch(() => {});
@@ -844,17 +770,7 @@ client.on('messageCreate', async (m) => {
           }
         }
 
-        // TRADE CHANNEL ENFORCEMENT
-        if (m.channel.id !== IDS.tradeExcluded && 
-            (contentLower.includes('trade') || contentLower.includes('trading') || contentLower.includes('trades'))) {
-          await m.delete().catch(() => {});
-          try {
-            await m.author.send('Please use the trading channel for trades, not other channels.');
-          } catch {}
-          return;
-        }
-
-        // BLACKLIST WORD FILTER
+// BLACKLIST WORD FILTER
         if (checkMsg(m)) {
           await m.delete().catch(() => {});
           if (m.member?.moderatable) {
@@ -1486,52 +1402,6 @@ client.on('interactionCreate', async (i) => {
 });
 
 // ==========================================
-// EXPRESS API - RATING SYSTEM
-// ==========================================
-app.post('/rating', async (req, res) => {
-  try {
-    if (!client.isReady()) {
-      return res.status(503).json({ success: false, error: 'Bot not ready' });
-    }
-    
-    const { message, stars, timestamp } = req.body;
-    
-    if (!message || !stars || !timestamp) {
-      return res.status(400).json({ success: false, error: 'Missing fields' });
-    }
-    
-    const n = Number(stars);
-    if (!Number.isFinite(n) || n < 1 || n > 5) {
-      return res.status(400).json({ success: false, error: 'Invalid stars' });
-    }
-    
-    const channel = await client.channels.fetch(IDS.rating).catch(() => null);
-    if (!channel) {
-      return res.status(404).json({ success: false, error: 'Channel not found' });
-    }
-    
-    await channel.send(`## New Rating\n${message}\n\n**Rating:** ${'⭐'.repeat(n)}`);
-    res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ==========================================
-// EXPRESS API - DOWNLOAD TRACKER
-// ==========================================
-app.post('/track', async (req, res) => {
-  try {
-    downloadCount++;
-    const c = await client.channels.fetch(IDS.download).catch(() => null);
-    if (c) await renameChannel(c, `Downloads: ${downloadCount}`);
-    res.sendStatus(200);
-  } catch {
-    res.sendStatus(500);
-  }
-});
-
-// ==========================================
 // EXPRESS API - EXECUTION TRACKER
 // ==========================================
 app.post('/execution', async (req, res) => {
@@ -1578,7 +1448,6 @@ app.get('/', (req, res) => {
   res.json({
     status: 'online',
     executions: executionCount,
-    downloads: downloadCount,
     members: memberCount,
     ready: client.isReady()
   });
