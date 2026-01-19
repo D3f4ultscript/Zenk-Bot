@@ -381,7 +381,7 @@ const setUserExp = async (userId, guildId, exp, reason = 'Manual adjustment') =>
 };
 
 const addUserExp = async (userId, guildId, amount) => {
-  const levels = readLevels();
+  const levels = await readLevels();
   const key = `${guildId}_${userId}`;
   
   if (!levels[key]) {
@@ -395,7 +395,7 @@ const addUserExp = async (userId, guildId, amount) => {
 };
 
 const removeUserExp = async (userId, guildId, amount) => {
-  const levels = readLevels();
+  const levels = await readLevels();
   const key = `${guildId}_${userId}`;
   
   if (!levels[key]) {
@@ -512,11 +512,18 @@ const updateCountsChannels = async () => {
     
     const mc = await client.channels.fetch(config.memberChannelId);
     if (mc) {
-      await mc.guild.members.fetch();
+      try {
+        await mc.guild.members.fetch({ limit: null });
+      } catch (e) {
+        console.error('Error fetching members:', e.message);
+      }
+      // Zähle nur echte Member (OHNE Bots)
       memberCount = mc.guild.members.cache.filter(m => !m.user.bot).size;
       await renameChannel(mc, `Member: ${memberCount}`);
     }
-  } catch {}
+  } catch (error) {
+    console.error('Error updating counts:', error.message);
+  }
 };
 
 // ==========================================
@@ -614,7 +621,8 @@ client.once('ready', async () => {
   setupConfig = readSetup();
   executionCount = readExecutions();
   await updateCountsChannels();
-  setInterval(updateCountsChannels, 600000);
+  // Aktualisiere Counts alle 60 Sekunden (Discord Rate Limit ist kein Problem)
+  setInterval(updateCountsChannels, 60000);
 
   const commands = [
     new SlashCommandBuilder()
@@ -667,25 +675,7 @@ client.once('ready', async () => {
     new SlashCommandBuilder()
       .setName('level')
       .setDescription('Check your level and experience')
-      .addUserOption(o => o.setName('user').setDescription('Check another user\'s level').setRequired(false)),
-    
-    new SlashCommandBuilder()
-      .setName('addexp')
-      .setDescription('Add EXP to a user (Admin only)')
-      .addUserOption(o => o.setName('user').setDescription('User to add EXP to').setRequired(true))
-      .addIntegerOption(o => o.setName('amount').setDescription('Amount of EXP to add').setRequired(true).setMinValue(1)),
-    
-    new SlashCommandBuilder()
-      .setName('removeexp')
-      .setDescription('Remove EXP from a user (Admin only)')
-      .addUserOption(o => o.setName('user').setDescription('User to remove EXP from').setRequired(true))
-      .addIntegerOption(o => o.setName('amount').setDescription('Amount of EXP to remove').setRequired(true).setMinValue(1)),
-    
-    new SlashCommandBuilder()
-      .setName('setlevel')
-      .setDescription('Set a user\'s level (Admin only)')
-      .addUserOption(o => o.setName('user').setDescription('User to set level for').setRequired(true))
-      .addIntegerOption(o => o.setName('level').setDescription('Level to set').setRequired(true).setMinValue(1))
+      .addUserOption(o => o.setName('user').setDescription('Check another user\'s level').setRequired(false))
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -707,7 +697,9 @@ client.on('guildMemberAdd', async (m) => {
   }
 });
 
-client.on('guildMemberRemove', updateCountsChannels);
+client.on('guildMemberRemove', async (m) => {
+  await updateCountsChannels();
+});
 
 // ==========================================
 // MESSAGE MODERATION SYSTEM
@@ -1162,7 +1154,7 @@ client.on('interactionCreate', async (i) => {
         await i.deferReply();
         
         const targetUser = i.options.getUser('user') || i.user;
-        const levels = readLevels();
+        const levels = await readLevels();
         const key = `${i.guild.id}_${targetUser.id}`;
         
         if (!levels[key] || !levels[key].exp) {
@@ -1213,106 +1205,11 @@ client.on('interactionCreate', async (i) => {
       }
     }
 
-    // SLASH COMMAND: ADDEXP
-    else if (i.isChatInputCommand() && i.commandName === 'addexp') {
-      if (!i.member.roles.cache.has(IDS.bypass)) {
-        return i.reply({ content: 'No permissions. You need the bypass role.', ephemeral: true });
-      }
-      
-      try {
-        const targetUser = i.options.getUser('user');
-        const amount = i.options.getInteger('amount');
-        
-        const result = await addUserExp(targetUser.id, i.guild.id, amount);
-        const levelChange = result.leveledUp ? ` (Leveled up from ${result.oldLevel} to ${result.level}!)` : '';
-        
-        await i.reply({ 
-          content: `Added ${amount} EXP to ${targetUser.tag}. New EXP: ${result.exp.toLocaleString()} (Level ${result.level})${levelChange}`,
-          ephemeral: true 
-        });
-        
-        await sendLog(new EmbedBuilder()
-          .setTitle('➕ EXP Added')
-          .addFields(
-            { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: true },
-            { name: 'Amount', value: `${amount}`, inline: true },
-            { name: 'New EXP', value: `${result.exp.toLocaleString()}`, inline: true },
-            { name: 'New Level', value: `${result.level}`, inline: true },
-            { name: 'Admin', value: i.user.tag }
-          )
-          .setColor('#00ff00')
-          .setTimestamp());
-      } catch (error) {
-        await i.reply({ content: 'Failed to add EXP', ephemeral: true });
-      }
-    }
 
-    // SLASH COMMAND: REMOVEEXP
-    else if (i.isChatInputCommand() && i.commandName === 'removeexp') {
-      if (!i.member.roles.cache.has(IDS.bypass)) {
-        return i.reply({ content: 'No permissions. You need the bypass role.', ephemeral: true });
-      }
-      
-      try {
-        const targetUser = i.options.getUser('user');
-        const amount = i.options.getInteger('amount');
-        
-        const result = await removeUserExp(targetUser.id, i.guild.id, amount);
-        const levelChange = result.level < result.oldLevel ? ` (Leveled down from ${result.oldLevel} to ${result.level}!)` : '';
-        
-        await i.reply({ 
-          content: `Removed ${amount} EXP from ${targetUser.tag}. New EXP: ${result.exp.toLocaleString()} (Level ${result.level})${levelChange}`,
-          ephemeral: true 
-        });
-        
-        await sendLog(new EmbedBuilder()
-          .setTitle('➖ EXP Removed')
-          .addFields(
-            { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: true },
-            { name: 'Amount', value: `${amount}`, inline: true },
-            { name: 'New EXP', value: `${result.exp.toLocaleString()}`, inline: true },
-            { name: 'New Level', value: `${result.level}`, inline: true },
-            { name: 'Admin', value: i.user.tag }
-          )
-          .setColor('#ffa500')
-          .setTimestamp());
-      } catch (error) {
-        await i.reply({ content: 'Failed to remove EXP', ephemeral: true });
-      }
-    }
 
-    // SLASH COMMAND: SETLEVEL
-    else if (i.isChatInputCommand() && i.commandName === 'setlevel') {
-      if (!i.member.roles.cache.has(IDS.bypass)) {
-        return i.reply({ content: 'No permissions. You need the bypass role.', ephemeral: true });
-      }
-      
-      try {
-        const targetUser = i.options.getUser('user');
-        const targetLevel = i.options.getInteger('level');
-        
-        const result = await setUserLevel(targetUser.id, i.guild.id, targetLevel);
-        
-        await i.reply({ 
-          content: `Set ${targetUser.tag}'s level to ${targetLevel}. EXP: ${result.exp.toLocaleString()} (was Level ${result.oldLevel})`,
-          ephemeral: true 
-        });
-        
-        await sendLog(new EmbedBuilder()
-          .setTitle('⚙️ Level Set')
-          .addFields(
-            { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: true },
-            { name: 'New Level', value: `${targetLevel}`, inline: true },
-            { name: 'Old Level', value: `${result.oldLevel}`, inline: true },
-            { name: 'New EXP', value: `${result.exp.toLocaleString()}`, inline: true },
-            { name: 'Admin', value: i.user.tag }
-          )
-          .setColor('#5865F2')
-          .setTimestamp());
-      } catch (error) {
-        await i.reply({ content: 'Failed to set level', ephemeral: true });
-      }
-    }
+
+
+
 
     // TICKET SELECT MENU
     else if (i.isStringSelectMenu() && i.customId === 'ticket-select') {
