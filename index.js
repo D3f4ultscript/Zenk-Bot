@@ -33,12 +33,18 @@ let db = null;
 const connectMongoDB = async () => {
   try {
     if (mongoClient) return; // Already connected
-    mongoClient = new MongoClient(mongoUri);
+    mongoClient = new MongoClient(mongoUri, {
+      serverSelectionTimeoutMS: 5000,
+      ssl: true,
+      retryWrites: true
+    });
     await mongoClient.connect();
     db = mongoClient.db('zenk_bot');
     console.log('✅ MongoDB connected');
   } catch (error) {
     console.error('❌ MongoDB connection error:', error.message);
+    console.error('MongoDB URI configured:', !!mongoUri);
+    db = null; // Ensure db is null on failure
   }
 };
 
@@ -115,7 +121,6 @@ const PHISHING_DOMAINS = [
 // ==========================================
 // FILE PATHS
 // ==========================================
-const executionsFile = path.join(__dirname, 'Executions.txt');
 const setupFile = path.join(__dirname, 'Setup.json');
 const levelsFile = path.join(__dirname, 'Levels.json');
 
@@ -129,28 +134,12 @@ const messageHistory = new Map();
 const userSpamTracker = new Map();
 const autoClearChannels = new Map();
 let setupConfig = {};
-let executionCount = 0;
 let memberCount = 0;
 let lastUpdate = 0;
 
 // ==========================================
 // FILE SYSTEM HELPERS
 // ==========================================
-const readExecutions = () => {
-  try {
-    if (!fs.existsSync(executionsFile)) return 0;
-    const n = Number(fs.readFileSync(executionsFile, 'utf8').trim());
-    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
-  } catch {
-    return 0;
-  }
-};
-
-const writeExecutions = (n) => {
-  try {
-    fs.writeFileSync(executionsFile, String(n));
-  } catch {}
-};
 
 const readSetup = () => {
   try {
@@ -418,10 +407,21 @@ const setUserLevel = async (userId, guildId, targetLevel) => {
 // ==========================================
 const renameChannel = async (c, n) => {
   try {
-    if (c.permissionsFor(client.user)?.has(PermissionFlagsBits.ManageChannels)) {
-      await c.setName(n);
+    if (!c) {
+      console.error('Channel is null or undefined');
+      return;
     }
-  } catch {}
+    
+    const hasPermission = c.permissionsFor(client.user)?.has(PermissionFlagsBits.ManageChannels);
+    if (!hasPermission) {
+      console.error(`No permission to rename channel ${c.id}`);
+      return;
+    }
+    
+    await c.setName(n);
+  } catch (error) {
+    console.error(`Error renaming channel ${c?.id || 'unknown'}:`, error.message);
+  }
 };
 
 const sendLog = async (e) => {
@@ -507,22 +507,27 @@ const restoreWebhook = async (wId, cId) => {
 // ==========================================
 const updateCountsChannels = async () => {
   try {
-    const ec = await client.channels.fetch(config.channelId);
-    if (ec) await renameChannel(ec, `Executions: ${executionCount}`);
-    
-    const mc = await client.channels.fetch(config.memberChannelId);
-    if (mc) {
-      try {
-        await mc.guild.members.fetch({ limit: null });
-      } catch (e) {
-        console.error('Error fetching members:', e.message);
+    // Update Member Channel
+    try {
+      const mc = await client.channels.fetch(config.memberChannelId).catch(e => {
+        console.error(`Could not fetch member channel ${config.memberChannelId}:`, e.message);
+        return null;
+      });
+      if (mc) {
+        try {
+          await mc.guild.members.fetch({ limit: null });
+        } catch (e) {
+          console.error('Error fetching members:', e.message);
+        }
+        // Zähle nur echte Member (OHNE Bots)
+        memberCount = mc.guild.members.cache.filter(m => !m.user.bot).size;
+        await renameChannel(mc, `Member: ${memberCount}`);
       }
-      // Zähle nur echte Member (OHNE Bots)
-      memberCount = mc.guild.members.cache.filter(m => !m.user.bot).size;
-      await renameChannel(mc, `Member: ${memberCount}`);
+    } catch (error) {
+      console.error('Error updating member channel:', error.message);
     }
   } catch (error) {
-    console.error('Error updating counts:', error.message);
+    console.error('Error in updateCountsChannels:', error.message);
   }
 };
 
@@ -619,7 +624,6 @@ client.once('ready', async () => {
   console.log('Bot ready');
   await connectMongoDB(); // Connect to MongoDB
   setupConfig = readSetup();
-  executionCount = readExecutions();
   await updateCountsChannels();
   // Aktualisiere Counts alle 60 Sekunden (Discord Rate Limit ist kein Problem)
   setInterval(updateCountsChannels, 60000);
@@ -1382,52 +1386,11 @@ client.on('interactionCreate', async (i) => {
 });
 
 // ==========================================
-// EXPRESS API - EXECUTION TRACKER
-// ==========================================
-app.post('/execution', async (req, res) => {
-  try {
-    executionCount++;
-    writeExecutions(executionCount);
-    const now = Date.now();
-    
-    if (now - lastUpdate >= 480000) {
-      const c = await client.channels.fetch(config.channelId).catch(() => null);
-      if (c) {
-        await renameChannel(c, `Executions: ${executionCount}`);
-        lastUpdate = now;
-      }
-    }
-    
-    res.json({ success: true, count: executionCount });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ==========================================
-// EXPRESS API - DATA EXPORT/IMPORT
-// ==========================================
-app.get('/export', (req, res) => {
-  res.type('text/plain').send(String(executionCount));
-});
-
-app.post('/import', (req, res) => {
-  const n = Number(req.body?.count);
-  if (!Number.isFinite(n) || n < 0) {
-    return res.status(400).json({ success: false });
-  }
-  executionCount = Math.floor(n);
-  writeExecutions(executionCount);
-  res.json({ success: true, count: executionCount });
-});
-
-// ==========================================
 // EXPRESS API - STATUS ENDPOINT
 // ==========================================
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    executions: executionCount,
     members: memberCount,
     ready: client.isReady()
   });
