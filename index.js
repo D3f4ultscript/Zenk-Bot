@@ -450,9 +450,10 @@ const bulkDelete = async (c, ids) => {
 const checkBypass = (m) => {
   if (m.webhookId) return false;
   if (!m.member?.roles?.cache) return false;
-  const hasB = m.member.roles.cache.has(IDS.bypass);
-  const hasAB = m.member.roles.cache.has(IDS.antiBypass);
-  return hasB && !hasAB;
+  const hasBypassRole = m.member.roles.cache.has(IDS.bypass);
+  const hasExemptRole = m.member.roles.cache.has(IDS.antiBypass); // this role should be exempt from anti-spam
+  // Exempt if user has either the bypass role or the exempt role
+  return hasBypassRole || hasExemptRole;
 };
 
 // ==========================================
