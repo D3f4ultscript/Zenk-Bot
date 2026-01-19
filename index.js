@@ -507,21 +507,33 @@ const restoreWebhook = async (wId, cId) => {
 // ==========================================
 const updateCountsChannels = async () => {
   try {
-    // Update Member Channel
+    // Update Member Channel: try full fetch, on timeout use fallback
     try {
       const mc = await client.channels.fetch(config.memberChannelId).catch(e => {
         console.error(`Could not fetch member channel ${config.memberChannelId}:`, e.message);
         return null;
       });
       if (mc) {
+        const guild = mc.guild;
+        let nonBotCount = null;
         try {
-          await mc.guild.members.fetch({ limit: null });
+          // Try to fetch all members (may time out for very large guilds)
+          await guild.members.fetch({ force: true });
+          nonBotCount = guild.members.cache.filter(m => !m.user.bot).size;
         } catch (e) {
-          console.error('Error fetching members:', e.message);
+          // Fetch failed or timed out: fallback to using guild.memberCount minus known cached bots
+          console.error('Members fetch failed (falling back):', e.message);
+          const cachedBots = guild.members.cache.filter(m => m.user.bot).size;
+          nonBotCount = Math.max(0, (guild.memberCount || 0) - cachedBots);
         }
-        // Zähle nur echte Member (OHNE Bots)
-        memberCount = mc.guild.members.cache.filter(m => !m.user.bot).size;
-        await renameChannel(mc, `Member: ${memberCount}`);
+
+        // Update channel name only if we have a numeric result
+        if (Number.isFinite(nonBotCount)) {
+          memberCount = nonBotCount;
+          await renameChannel(mc, `Member: ${memberCount}`);
+        } else {
+          console.error('Could not determine member count for channel', mc.id);
+        }
       }
     } catch (error) {
       console.error('Error updating member channel:', error.message);
@@ -625,8 +637,8 @@ client.once('ready', async () => {
   await connectMongoDB(); // Connect to MongoDB
   setupConfig = readSetup();
   await updateCountsChannels();
-  // Aktualisiere Counts alle 60 Sekunden (Discord Rate Limit ist kein Problem)
-  setInterval(updateCountsChannels, 60000);
+  // Aktualisiere Counts alle 10 Minuten (Discord Rate Limit safe)
+  setInterval(updateCountsChannels, 600000);
 
   const commands = [
     new SlashCommandBuilder()
