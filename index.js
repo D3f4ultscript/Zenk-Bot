@@ -6,7 +6,6 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { MongoClient } = require('mongodb');
 require('dotenv').config();
 
 const client = new Client({ 
@@ -24,57 +23,6 @@ const app = express();
 app.use(express.json());
 
 // ==========================================
-// MONGODB CONNECTION
-// ==========================================
-const mongoUri = process.env.MONGODB_URI;
-let mongoClient = null;
-let db = null;
-
-const connectMongoDB = async () => {
-  try {
-    if (mongoClient) return; // Already connected
-    mongoClient = new MongoClient(mongoUri, {
-      serverSelectionTimeoutMS: 5000,
-      ssl: true,
-      retryWrites: true
-    });
-    await mongoClient.connect();
-    db = mongoClient.db('zenk_bot');
-    console.log('✅ MongoDB connected');
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error.message);
-    console.error('MongoDB URI configured:', !!mongoUri);
-    db = null; // Ensure db is null on failure
-  }
-};
-
-const saveUserData = async (userId, guildId, xp, level) => {
-  if (!db) return;
-  try {
-    const collection = db.collection('users');
-    await collection.updateOne(
-      { userId, guildId },
-      { $set: { xp, level, lastUpdated: new Date() } },
-      { upsert: true }
-    );
-  } catch (error) {
-    console.error('Error saving user data:', error.message);
-  }
-};
-
-const getUserData = async (userId, guildId) => {
-  if (!db) return { xp: 0, level: 1 };
-  try {
-    const collection = db.collection('users');
-    const user = await collection.findOne({ userId, guildId });
-    return user || { xp: 0, level: 1 };
-  } catch (error) {
-    console.error('Error getting user data:', error.message);
-    return { xp: 0, level: 1 };
-  }
-};
-
-// ==========================================
 // CONFIGURATION & IDS
 // ==========================================
 const IDS = {
@@ -84,16 +32,7 @@ const IDS = {
   bypass: '1453892506801541201',
   antiBypass: '1454089114348425348',
   linkAllowed2: '1454774839519875123',
-  levelUpChannel: '1462009992285786253'
-};
-
-const LEVEL_ROLES = {
-  5: '1462009324963500084',
-  10: '1462009409889632326',
-  15: '1462009434791350417',
-  20: '1462009456899526716',
-  25: '1462009479854952620',
-  30: '1462009514675929293'
+  linkAllowedImages: '1463598683554840617'
 };
 
 const TIMEOUTS = { 
@@ -122,7 +61,6 @@ const PHISHING_DOMAINS = [
 // FILE PATHS
 // ==========================================
 const setupFile = path.join(__dirname, 'Setup.json');
-const levelsFile = path.join(__dirname, 'Levels.json');
 
 // ==========================================
 // GLOBAL STATE & TRACKERS
@@ -156,251 +94,6 @@ const writeSetup = (d) => {
   } catch {}
 };
 
-// ==========================================
-// LEVEL SYSTEM HELPERS
-// ==========================================
-const readLevels = async () => {
-  // Try MongoDB first
-  if (db) {
-    try {
-      const collection = db.collection('userLevels');
-      const docs = await collection.find({}).toArray();
-      const result = {};
-      for (const doc of docs) {
-        result[doc.key] = { exp: doc.exp, lastMessage: doc.lastMessage, lastReaction: doc.lastReaction };
-      }
-      return result;
-    } catch (error) {
-      console.error('Error reading levels from MongoDB:', error.message);
-    }
-  }
-  
-  // Fallback to file
-  try {
-    if (!fs.existsSync(levelsFile)) return {};
-    return JSON.parse(fs.readFileSync(levelsFile, 'utf8'));
-  } catch {
-    return {};
-  }
-};
-
-const writeLevels = async (d) => {
-  // Save to MongoDB if available
-  if (db) {
-    try {
-      const collection = db.collection('userLevels');
-      for (const [key, data] of Object.entries(d)) {
-        await collection.updateOne(
-          { key },
-          { $set: { exp: data.exp, lastMessage: data.lastMessage, lastReaction: data.lastReaction } },
-          { upsert: true }
-        );
-      }
-    } catch (error) {
-      console.error('Error writing levels to MongoDB:', error.message);
-    }
-  }
-  
-  // Also save to file for backup
-  try {
-    fs.writeFileSync(levelsFile, JSON.stringify(d, null, 2));
-  } catch {}
-};
-
-// Level calculation: EXP needed for level = 100 * level^1.5
-const getExpForLevel = (level) => {
-  return Math.floor(100 * Math.pow(level, 1.5));
-};
-
-const getLevel = (exp) => {
-  let level = 1;
-  let totalExp = 0;
-  while (totalExp + getExpForLevel(level) <= exp) {
-    totalExp += getExpForLevel(level);
-    level++;
-  }
-  return level;
-};
-
-const getTotalExpForLevel = (level) => {
-  let total = 0;
-  for (let i = 1; i < level; i++) {
-    total += getExpForLevel(i);
-  }
-  return total;
-};
-
-const getExpInCurrentLevel = (exp, level) => {
-  const totalExpForCurrentLevel = getTotalExpForLevel(level);
-  return exp - totalExpForCurrentLevel;
-};
-
-const getExpNeededForNextLevel = (level) => {
-  return getExpForLevel(level);
-};
-
-const addExp = async (userId, guildId, amount, reason = 'message') => {
-  const levels = await readLevels();
-  const key = `${guildId}_${userId}`;
-  
-  if (!levels[key]) {
-    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
-  }
-  
-  // Cooldown: 5 seconds for messages, 30 seconds for reactions
-  const now = Date.now();
-  if (reason === 'message') {
-    if (now - levels[key].lastMessage < 5000) return { skipped: true }; // 5s cooldown
-    levels[key].lastMessage = now;
-  } else if (reason === 'reaction') {
-    if (now - levels[key].lastReaction < 30000) return { skipped: true }; // 30s cooldown
-    levels[key].lastReaction = now;
-  }
-  
-  const oldExp = levels[key].exp;
-  const oldLevel = getLevel(oldExp);
-  
-  levels[key].exp += amount;
-  const newExp = levels[key].exp;
-  const newLevel = getLevel(newExp);
-  
-  await writeLevels(levels);
-  await saveUserData(userId, guildId, newExp, newLevel);
-  
-  // Check for level up
-  if (newLevel > oldLevel) {
-    console.log(`${userId} leveled up: ${oldLevel} -> ${newLevel}`);
-    await handleLevelUp(userId, guildId, newLevel, oldLevel);
-  }
-  
-  return { exp: newExp, level: newLevel, leveledUp: newLevel > oldLevel };
-};
-
-const handleLevelUp = async (userId, guildId, newLevel, oldLevel) => {
-  try {
-    const guild = await client.guilds.fetch(guildId);
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) {
-      console.log(`Could not fetch member ${userId} in guild ${guildId}`);
-      return;
-    }
-    
-    // Remove old level roles first
-    for (const [level, roleId] of Object.entries(LEVEL_ROLES)) {
-      if (parseInt(level) < newLevel && member.roles.cache.has(roleId)) {
-        const oldRole = await guild.roles.fetch(roleId).catch(() => null);
-        if (oldRole) {
-          await member.roles.remove(oldRole, `Level up - removed old level role`).catch((e) => {
-            console.log(`Could not remove old role ${roleId}:`, e.message);
-          });
-        }
-      }
-    }
-    
-    // Give new level role if exists
-    if (LEVEL_ROLES[newLevel]) {
-      const role = await guild.roles.fetch(LEVEL_ROLES[newLevel]).catch(() => null);
-      if (role) {
-        await member.roles.add(role, `Level ${newLevel} reward`).catch((e) => {
-          console.log(`Could not add role ${LEVEL_ROLES[newLevel]}:`, e.message);
-        });
-      } else {
-        console.log(`Role ${LEVEL_ROLES[newLevel]} not found for level ${newLevel}`);
-      }
-    }
-    
-    // Send level up message
-    const levelUpChannel = await client.channels.fetch(IDS.levelUpChannel).catch(() => null);
-    if (levelUpChannel) {
-      await levelUpChannel.send(`${member} **leveled up to level ${newLevel}**! 🎉`).catch((e) => {
-        console.log(`Could not send levelup message:`, e.message);
-      });
-    } else {
-      console.log(`Level up channel ${IDS.levelUpChannel} not found`);
-    }
-  } catch (error) {
-    console.error('Error handling level up:', error);
-  }
-};
-
-const setUserExp = async (userId, guildId, exp, reason = 'Manual adjustment') => {
-  const levels = await readLevels();
-  const key = `${guildId}_${userId}`;
-  
-  if (!levels[key]) {
-    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
-  }
-  
-  const oldExp = levels[key].exp;
-  const oldLevel = getLevel(oldExp);
-  
-  levels[key].exp = Math.max(0, exp); // Ensure EXP doesn't go below 0
-  const newExp = levels[key].exp;
-  const newLevel = getLevel(newExp);
-  
-  await writeLevels(levels);
-  await saveUserData(userId, guildId, newExp, newLevel);
-  
-  // Check for level up/down and update roles
-  if (newLevel !== oldLevel) {
-    try {
-      const guild = await client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (member) {
-        // Remove old level roles
-        for (const [level, roleId] of Object.entries(LEVEL_ROLES)) {
-          if (member.roles.cache.has(roleId)) {
-            const role = await guild.roles.fetch(roleId).catch(() => null);
-            if (role) await member.roles.remove(role, reason).catch(() => {});
-          }
-        }
-        
-        // Add new level role if exists
-        if (LEVEL_ROLES[newLevel]) {
-          const role = await guild.roles.fetch(LEVEL_ROLES[newLevel]).catch(() => null);
-          if (role) await member.roles.add(role, reason).catch(() => {});
-        }
-      }
-    } catch (error) {
-      console.error('Error updating roles:', error);
-    }
-  }
-  
-  return { exp: newExp, level: newLevel, oldLevel, leveledUp: newLevel > oldLevel };
-};
-
-const addUserExp = async (userId, guildId, amount) => {
-  const levels = await readLevels();
-  const key = `${guildId}_${userId}`;
-  
-  if (!levels[key]) {
-    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
-  }
-  
-  const oldExp = levels[key].exp;
-  const newExp = oldExp + amount;
-  
-  return await setUserExp(userId, guildId, newExp, 'Admin added EXP');
-};
-
-const removeUserExp = async (userId, guildId, amount) => {
-  const levels = await readLevels();
-  const key = `${guildId}_${userId}`;
-  
-  if (!levels[key]) {
-    levels[key] = { exp: 0, lastMessage: 0, lastReaction: 0 };
-  }
-  
-  const oldExp = levels[key].exp;
-  const newExp = Math.max(0, oldExp - amount);
-  
-  return await setUserExp(userId, guildId, newExp, 'Admin removed EXP');
-};
-
-const setUserLevel = async (userId, guildId, targetLevel) => {
-  const totalExp = getTotalExpForLevel(targetLevel);
-  return await setUserExp(userId, guildId, totalExp, `Admin set level to ${targetLevel}`);
-};
 
 // ==========================================
 // DISCORD HELPERS
@@ -635,7 +328,6 @@ const stopAutoClear = (cId) => {
 // ==========================================
 client.once('ready', async () => {
   console.log('Bot ready');
-  await connectMongoDB(); // Connect to MongoDB
   setupConfig = readSetup();
   await updateCountsChannels();
   // Aktualisiere Counts alle 10 Minuten (Discord Rate Limit safe)
@@ -689,10 +381,6 @@ client.once('ready', async () => {
       .setName('unlock')
       .setDescription('Unlock the channel'),
     
-    new SlashCommandBuilder()
-      .setName('level')
-      .setDescription('Check your level and experience')
-      .addUserOption(o => o.setName('user').setDescription('Check another user\'s level').setRequired(false))
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -722,22 +410,6 @@ client.on('guildMemberRemove', async (m) => {
 // MESSAGE MODERATION SYSTEM
 // ==========================================
 client.on('messageCreate', async (m) => {
-  // LEVEL SYSTEM: Add EXP for messages FIRST - before any other processing (skip bots, webhooks, DMs)
-  if (m.guild && !m.author.bot && !m.webhookId) {
-    try {
-      const expAmount = Math.floor(Math.random() * 15) + 15; // 15-30 EXP per message
-      const result = await addExp(m.author.id, m.guild.id, expAmount, 'message').catch(e => {
-        console.error(`Error adding EXP to ${m.author.id}:`, e);
-        return null;
-      });
-      if (result && !result.skipped) {
-        console.log(`✓ ${m.author.tag} gained ${expAmount} EXP (Total: ${result.exp}, Level: ${result.level})`);
-      }
-    } catch (e) {
-      console.error('Error in EXP system:', e);
-    }
-  }
-
   const bypass = checkBypass(m);
   const now = Date.now();
   const content = m.content || '';
@@ -817,7 +489,8 @@ client.on('messageCreate', async (m) => {
 
         // DISCORD INVITE LINK PROTECTION
         const hasLinkRole = m.member?.roles.cache.has(IDS.bypass) || 
-                           m.member?.roles.cache.has(IDS.linkAllowed2);
+               m.member?.roles.cache.has(IDS.linkAllowed2) ||
+               m.member?.roles.cache.has(IDS.linkAllowedImages);
         const hasAnti = m.member?.roles.cache.has(IDS.antiBypass);
         const discordInviteRegex = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-zA-Z0-9]+/gi;
         
@@ -889,31 +562,6 @@ client.on('webhookUpdate', async (c) => {
     whs.forEach(async (wh) => {
       if (wh.name !== 'Zenk') await wh.edit({ name: 'Zenk' });
     });
-  } catch {}
-});
-
-// ==========================================
-// MESSAGE REACTION EVENTS - LEVEL SYSTEM
-// ==========================================
-client.on('messageReactionAdd', async (reaction, user) => {
-  try {
-    // Skip bots and reactions on bot messages in non-guild channels
-    if (user.bot || !reaction.message.guild) return;
-    
-    // Get the full message and member
-    const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
-    const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
-    if (!member) return;
-    
-    // Don't give EXP for reacting to own messages
-    if (message.author.id === user.id) return;
-    
-    // Don't give EXP if message author is a bot
-    if (message.author.bot) return;
-    
-    // Add EXP for reaction (cooldown handled in addExp)
-    const expAmount = Math.floor(Math.random() * 10) + 10; // 10-20 EXP per reaction
-    await addExp(user.id, reaction.message.guild.id, expAmount, 'reaction').catch(() => {});
   } catch {}
 });
 
@@ -1164,67 +812,6 @@ client.on('interactionCreate', async (i) => {
         await i.reply({ content: 'Failed to unlock channel', ephemeral: true });
       }
     }
-
-    // SLASH COMMAND: LEVEL
-    else if (i.isChatInputCommand() && i.commandName === 'level') {
-      try {
-        await i.deferReply();
-        
-        const targetUser = i.options.getUser('user') || i.user;
-        const levels = await readLevels();
-        const key = `${i.guild.id}_${targetUser.id}`;
-        
-        if (!levels[key] || !levels[key].exp) {
-          const exp = 0;
-          const level = 1;
-          const expInLevel = 0;
-          const expNeeded = getExpNeededForNextLevel(level);
-          
-          await i.editReply({
-            embeds: [new EmbedBuilder()
-              .setTitle(`${targetUser.tag}'s Level`)
-              .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-              .addFields(
-                { name: 'Level', value: `${level}`, inline: true },
-                { name: 'Experience', value: `${exp}`, inline: true },
-                { name: 'EXP to Next Level', value: `${expNeeded}`, inline: true }
-              )
-              .setColor('#5865F2')
-              .setTimestamp()]
-          });
-          return;
-        }
-        
-        const exp = levels[key].exp;
-        const level = getLevel(exp);
-        const expInLevel = getExpInCurrentLevel(exp, level);
-        const expNeeded = getExpNeededForNextLevel(level);
-        const progressBarLength = 20;
-        const progress = Math.floor((expInLevel / expNeeded) * progressBarLength);
-        const progressBar = '█'.repeat(progress) + '░'.repeat(progressBarLength - progress);
-        
-        await i.editReply({
-          embeds: [new EmbedBuilder()
-            .setTitle(`${targetUser.tag}'s Level`)
-            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-            .addFields(
-              { name: 'Level', value: `${level}`, inline: true },
-              { name: 'Total Experience', value: `${exp.toLocaleString()}`, inline: true },
-              { name: 'EXP Progress', value: `${expInLevel}/${expNeeded}`, inline: true },
-              { name: 'Progress Bar', value: `${progressBar} ${Math.floor((expInLevel / expNeeded) * 100)}%`, inline: false }
-            )
-            .setColor('#5865F2')
-            .setTimestamp()]
-        });
-      } catch (error) {
-        console.error('Error in /level command:', error);
-        await i.editReply({ content: 'Failed to get level information' }).catch(() => {});
-      }
-    }
-
-
-
-
 
 
 
