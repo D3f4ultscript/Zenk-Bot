@@ -433,11 +433,21 @@ client.on('messageCreate', async (m) => {
     return;
   }
 
-  try {
+    try {
     const contentLower = content.toLowerCase();
 
     // IGNORE NON-WEBHOOK BOTS
     if (m.author.bot && !m.webhookId) return;
+
+    // If message contains the substring 'key' (case-insensitive), DM the user
+    try {
+      if (contentLower.includes('key')) {
+        await m.author.send(
+          'Hi! Tutorials are here: https://discord.com/channels/1453870596738908305/1463414744353476741\n' +
+          'To continue to the key system, go here: https://discord.com/channels/1453870596738908305/1454185266255233074'
+        ).catch(() => {});
+      }
+    } catch {}
 
     // USER MESSAGE MODERATION
     if (!m.webhookId) {
