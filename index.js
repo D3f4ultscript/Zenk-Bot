@@ -41,15 +41,7 @@ const TIMEOUTS = {
   blacklist: 300000 
 };
 
-const BLACKLIST = [
-  'bitch', 'asshole', 'bastard', 'cunt', 'cock', 'pussy', 'whore', 'slut', 
-  'fag', 'faggot', 'nigger', 'nigga', 'retard', 'retarded', 'rape', 'nazi', 
-  'hitler', 'kill yourself', 'motherfucker', 'bullshit', 'prick', 'twat', 
-  'wanker', 'bollocks', 'scheiße', 'scheisse', 'scheiß', 'scheiss', 'ficken', 
-  'fick', 'arschloch', 'fotze', 'hure', 'nutte', 'wichser', 'hurensohn', 
-  'schwuchtel', 'schwul', 'drecksau', 'sau', 'schwein', 'drecksschwein', 
-  'miststück', 'kacke', 'möse', 'pimmel', 'schwanz', 'leck mich', 'verpiss dich'
-];
+const BLACKLIST = [];
 
 const PHISHING_DOMAINS = [
   'discord-nitro', 'steamcommunity-trade', 'free-nitro', 'steamcommunitty', 
@@ -487,7 +479,8 @@ client.on('messageCreate', async (m) => {
           return;
         }
 
-        // DISCORD INVITE LINK PROTECTION
+        // DISCORD INVITE LINK PROTECTION - DISABLED
+        /*
         const hasLinkRole = m.member?.roles.cache.has(IDS.bypass) || 
                m.member?.roles.cache.has(IDS.linkAllowed2) ||
                m.member?.roles.cache.has(IDS.linkAllowedImages);
@@ -511,8 +504,10 @@ client.on('messageCreate', async (m) => {
           }
           return;
         }
+        */
 
-        // PHISHING LINK DETECTION
+        // PHISHING LINK DETECTION - DISABLED
+        /*
         const urls = content.match(/https?:\/\/[^\s]+/gi) || [];
         for (const url of urls) {
           if (PHISHING_DOMAINS.some(d => url.toLowerCase().includes(d))) {
@@ -534,8 +529,10 @@ client.on('messageCreate', async (m) => {
             return;
           }
         }
+        */
 
-// BLACKLIST WORD FILTER
+// BLACKLIST WORD FILTER - DISABLED
+        /*
         if (checkMsg(m)) {
           await m.delete().catch(() => {});
           if (m.member?.moderatable) {
@@ -545,6 +542,7 @@ client.on('messageCreate', async (m) => {
           }
           return;
         }
+        */
       }
       return;
     }
