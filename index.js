@@ -66,6 +66,27 @@ const autoClearChannels = new Map();
 let setupConfig = {};
 let memberCount = 0;
 let lastUpdate = 0;
+let updateScheduled = false;
+
+const scheduleMemberCountUpdate = () => {
+  try {
+    if (updateScheduled) return;
+    updateScheduled = true;
+    const since = Date.now() - (lastUpdate || 0);
+    const wait = Math.max(0, 600000 - since); // 10 minutes minus time since last update
+    setTimeout(async () => {
+      try {
+        await updateCountsChannels();
+      } catch (e) {
+        console.error('Scheduled member count update failed:', e?.message || e);
+      } finally {
+        updateScheduled = false;
+      }
+    }, wait);
+  } catch (e) {
+    updateScheduled = false;
+  }
+};
 
 // ==========================================
 // FILE SYSTEM HELPERS
@@ -217,6 +238,7 @@ const updateCountsChannels = async () => {
         if (Number.isFinite(nonBotCount)) {
           memberCount = nonBotCount;
           await renameChannel(mc, `Member: ${memberCount}`);
+          lastUpdate = Date.now();
         } else {
           console.error('Could not determine member count for channel', mc.id);
         }
@@ -385,7 +407,7 @@ client.once('ready', async () => {
 // MEMBER JOIN/LEAVE EVENTS
 // ==========================================
 client.on('guildMemberAdd', async (m) => {
-  await updateCountsChannels();
+  scheduleMemberCountUpdate();
   if (setupConfig.welcome) {
     try {
       const c = await client.channels.fetch(setupConfig.welcome);
@@ -395,7 +417,7 @@ client.on('guildMemberAdd', async (m) => {
 });
 
 client.on('guildMemberRemove', async (m) => {
-  await updateCountsChannels();
+  scheduleMemberCountUpdate();
 });
 
 // ==========================================
