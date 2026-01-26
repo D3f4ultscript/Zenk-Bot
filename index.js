@@ -395,6 +395,10 @@ client.once('ready', async () => {
       .setName('unlock')
       .setDescription('Unlock the channel'),
     
+    new SlashCommandBuilder()
+      .setName('booster')
+      .setDescription('Ping all boosters'),
+    
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -619,7 +623,21 @@ client.on('interactionCreate', async (i) => {
       }
       
       await member.timeout(ms, `Timed out by ${i.user.tag}`);
-      await i.reply({ content: `Timed out ${user.tag} for ${duration}`, ephemeral: true });
+      await i.reply({ content: `Timed out ${user.tag} for ${duration} and deleting messages...`, ephemeral: true });
+
+      // Search and delete messages in all channels
+      i.guild.channels.cache.forEach(async (channel) => {
+        if (channel.isTextBased() && channel.permissionsFor(i.guild.members.me).has(PermissionFlagsBits.ManageMessages)) {
+          try {
+            const fetchedMessages = await channel.messages.fetch({ limit: 100 });
+            const userMessages = fetchedMessages.filter(msg => msg.author.id === user.id);
+            if (userMessages.size > 0) {
+              await channel.bulkDelete(userMessages, true).catch(() => {});
+            }
+          } catch (err) {}
+        }
+      });
+
       await sendLog(new EmbedBuilder()
         .setTitle('⏱️ User Timed Out')
         .addFields(
@@ -840,6 +858,38 @@ client.on('interactionCreate', async (i) => {
           .setTimestamp());
       } catch (error) {
         await i.reply({ content: 'Failed to unlock channel', ephemeral: true });
+      }
+    }
+
+    // SLASH COMMAND: BOOSTER
+    else if (i.isChatInputCommand() && i.commandName === 'booster') {
+      const requiredRole = '1453892506801541201';
+      const targetRole = '1464781880288350310';
+
+      if (!i.member.roles.cache.has(requiredRole)) {
+        return i.reply({ content: 'Keine Berechtigung.', ephemeral: true });
+      }
+
+      const roleToPing = i.guild.roles.cache.get(targetRole);
+      if (!roleToPing) {
+        return i.reply({ content: 'Booster Rolle nicht gefunden.', ephemeral: true });
+      }
+
+      const membersToPing = "## **Booster List**\n" + roleToPing.members.map(m => `- <@${m.id}>`).join('\n');
+      
+      if (!membersToPing || roleToPing.members.size === 0) {
+        return i.reply({ content: 'Keine User mit dieser Rolle gefunden.', ephemeral: true });
+      }
+
+      // Falls die Nachricht zu lang ist (Discord Limit 2000 Zeichen)
+      if (membersToPing.length > 2000) {
+        const chunks = membersToPing.match(/[\s\S]{1,2000}/g) || [];
+        await i.reply({ content: chunks[0] });
+        for (let j = 1; j < chunks.length; j++) {
+          await i.channel.send({ content: chunks[j] });
+        }
+      } else {
+        await i.reply({ content: membersToPing });
       }
     }
 
