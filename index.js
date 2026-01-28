@@ -1,6 +1,7 @@
 // ==========================================
 // DEPENDENCIES & CLIENT SETUP
 // ==========================================
+console.log('--- STARTING BOT ---');
 require('dotenv').config();
 const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes, ChannelType, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
@@ -19,6 +20,8 @@ process.on('uncaughtException', (error) => {
 if (!config.token) {
   console.error('Missing DISCORD_TOKEN. Set it in Render Environment or .env locally.');
   process.exit(1);
+} else {
+  console.log('Token found, length:', config.token.length);
 }
 
 // Create a simple HTTP server to satisfy Render's port check
