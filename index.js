@@ -1,6 +1,3 @@
-// ==========================================
-// DEPENDENCIES & CLIENT SETUP
-// ==========================================
 const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes, ChannelType, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
@@ -22,9 +19,6 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-// ==========================================
-// CONFIGURATION & IDS
-// ==========================================
 const IDS = {
   staff: '1454608694850486313',
   log: '1456977089864400970',
@@ -49,14 +43,8 @@ const PHISHING_DOMAINS = [
   'blasze.tk', 'freegiftcodes'
 ];
 
-// ==========================================
-// FILE PATHS
-// ==========================================
 const setupFile = path.join(__dirname, 'Setup.json');
 
-// ==========================================
-// GLOBAL STATE & TRACKERS
-// ==========================================
 const webhookTracker = new Map();
 const webhookCooldown = new Map();
 const activeTickets = new Map();
@@ -73,7 +61,7 @@ const scheduleMemberCountUpdate = () => {
     if (updateScheduled) return;
     updateScheduled = true;
     const since = Date.now() - (lastUpdate || 0);
-    const wait = Math.max(0, 600000 - since); // 10 minutes minus time since last update
+    const wait = Math.max(0, 600000 - since);
     setTimeout(async () => {
       try {
         await updateCountsChannels();
@@ -87,10 +75,6 @@ const scheduleMemberCountUpdate = () => {
     updateScheduled = false;
   }
 };
-
-// ==========================================
-// FILE SYSTEM HELPERS
-// ==========================================
 
 const readSetup = () => {
   try {
@@ -107,23 +91,17 @@ const writeSetup = (d) => {
   } catch {}
 };
 
-
-// ==========================================
-// DISCORD HELPERS
-// ==========================================
 const renameChannel = async (c, n) => {
   try {
     if (!c) {
       console.error('Channel is null or undefined');
       return;
     }
-    
     const hasPermission = c.permissionsFor(client.user)?.has(PermissionFlagsBits.ManageChannels);
     if (!hasPermission) {
       console.error(`No permission to rename channel ${c.id}`);
       return;
     }
-    
     await c.setName(n);
   } catch (error) {
     console.error(`Error renaming channel ${c?.id || 'unknown'}:`, error.message);
@@ -150,21 +128,14 @@ const bulkDelete = async (c, ids) => {
   } catch {}
 };
 
-// ==========================================
-// PERMISSION & BYPASS SYSTEM
-// ==========================================
 const checkBypass = (m) => {
   if (m.webhookId) return false;
   if (!m.member?.roles?.cache) return false;
   const hasBypassRole = m.member.roles.cache.has(IDS.bypass);
-  const hasExemptRole = m.member.roles.cache.has(IDS.antiBypass); // this role should be exempt from anti-spam
-  // Exempt if user has either the bypass role or the exempt role
+  const hasExemptRole = m.member.roles.cache.has(IDS.antiBypass);
   return hasBypassRole || hasExemptRole;
 };
 
-// ==========================================
-// MODERATION HELPERS
-// ==========================================
 const hasBlacklist = (t, bl) => {
   if (!t) return false;
   const l = t.toLowerCase();
@@ -196,9 +167,6 @@ const parseDuration = (s) => {
   return v * { s: 1000, m: 60000, h: 3600000, d: 86400000 }[u];
 };
 
-// ==========================================
-// WEBHOOK PROTECTION SYSTEM
-// ==========================================
 const restoreWebhook = async (wId, cId) => {
   try {
     const c = await client.channels.fetch(cId);
@@ -209,12 +177,8 @@ const restoreWebhook = async (wId, cId) => {
   } catch {}
 };
 
-// ==========================================
-// CHANNEL STATS UPDATER
-// ==========================================
 const updateCountsChannels = async () => {
   try {
-    // Update Member Channel: try full fetch, on timeout use fallback
     try {
       const mc = await client.channels.fetch(config.memberChannelId).catch(e => {
         console.error(`Could not fetch member channel ${config.memberChannelId}:`, e.message);
@@ -224,17 +188,13 @@ const updateCountsChannels = async () => {
         const guild = mc.guild;
         let nonBotCount = null;
         try {
-          // Try to fetch all members (may time out for very large guilds)
           await guild.members.fetch({ force: true });
           nonBotCount = guild.members.cache.filter(m => !m.user.bot).size;
         } catch (e) {
-          // Fetch failed or timed out: fallback to using guild.memberCount minus known cached bots
           console.error('Members fetch failed (falling back):', e.message);
           const cachedBots = guild.members.cache.filter(m => m.user.bot).size;
           nonBotCount = Math.max(0, (guild.memberCount || 0) - cachedBots);
         }
-
-        // Update channel name only if we have a numeric result
         if (Number.isFinite(nonBotCount)) {
           memberCount = nonBotCount;
           await renameChannel(mc, `Member: ${memberCount}`);
@@ -251,15 +211,11 @@ const updateCountsChannels = async () => {
   }
 };
 
-// ==========================================
-// TICKET SYSTEM - INFRASTRUCTURE
-// ==========================================
 const ensureTicketInfra = async (guild, hintChannel) => {
   if (setupConfig.ticketCategory) {
     const cat = await guild.channels.fetch(setupConfig.ticketCategory).catch(() => null);
     if (cat && cat.type === ChannelType.GuildCategory) return cat;
   }
-  
   let cat = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '</> Tickets </>');
   if (!cat) {
     cat = await guild.channels.create({
@@ -272,7 +228,6 @@ const ensureTicketInfra = async (guild, hintChannel) => {
     }).catch(() => null);
   }
   if (!cat) return null;
-
   if (!setupConfig.ticketLogs) {
     let logs = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'ticket-logs');
     if (!logs) {
@@ -288,30 +243,23 @@ const ensureTicketInfra = async (guild, hintChannel) => {
     }
     if (logs) setupConfig.ticketLogs = logs.id;
   }
-
   setupConfig.ticketCategory = cat.id;
   writeSetup(setupConfig);
   return cat;
 };
 
-// ==========================================
-// AUTOCLEAR SYSTEM
-// ==========================================
 const autoClearLoop = async (cId) => {
   try {
     const c = await client.channels.fetch(cId).catch(() => null);
     if (!c?.isTextBased()) return;
-    
     const msgs = await c.messages.fetch({ limit: 100 }).catch(() => null);
     if (!msgs?.size) return;
-
     const guild = c.guild;
     const needFetch = new Set();
     for (const m of msgs.values()) {
       if (!m.author.bot && !m.webhookId && !m.member) needFetch.add(m.author.id);
     }
     if (needFetch.size) await guild.members.fetch({ user: [...needFetch] }).catch(() => {});
-
     const del = [];
     for (const m of msgs.values()) {
       if (m.author.bot || m.webhookId) {
@@ -337,14 +285,12 @@ const stopAutoClear = (cId) => {
   return true;
 };
 
-// ==========================================
-// BOT READY EVENT
-// ==========================================
+const lastBoosterListMessage = new Map();
+
 client.once('ready', async () => {
   console.log('Bot ready');
   setupConfig = readSetup();
   await updateCountsChannels();
-  // Aktualisiere Counts alle 10 Minuten (Discord Rate Limit safe)
   setInterval(updateCountsChannels, 600000);
 
   const commands = [
@@ -353,12 +299,10 @@ client.once('ready', async () => {
       .setDescription('Timeout a user')
       .addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true))
       .addStringOption(o => o.setName('duration').setDescription('Duration (e.g., 10s, 5m, 1h, 2d)').setRequired(true)),
-    
     new SlashCommandBuilder()
       .setName('unmute')
       .setDescription('Remove timeout from a user')
       .addUserOption(o => o.setName('user').setDescription('User to unmute').setRequired(true)),
-    
     new SlashCommandBuilder()
       .setName('setup')
       .setDescription('Setup bot features')
@@ -366,39 +310,41 @@ client.once('ready', async () => {
         .addChoices({ name: 'Tickets', value: 'tickets' }, { name: 'Welcome', value: 'welcome' }))
       .addChannelOption(o => o.setName('channel').setDescription('Channel for the feature').setRequired(true)
         .addChannelTypes(ChannelType.GuildText)),
-    
     new SlashCommandBuilder()
       .setName('resetup')
       .setDescription('Remove bot setup')
       .addStringOption(o => o.setName('feature').setDescription('Feature to remove').setRequired(true)
         .addChoices({ name: 'Tickets', value: 'tickets' }, { name: 'Welcome', value: 'welcome' })),
-    
     new SlashCommandBuilder()
       .setName('clear')
       .setDescription('Clear messages in this channel')
       .addIntegerOption(o => o.setName('amount').setDescription('Number of messages to delete (1-100)').setRequired(true).setMinValue(1).setMaxValue(100))
       .addUserOption(o => o.setName('user').setDescription('Only delete messages from this user').setRequired(false)),
-    
     new SlashCommandBuilder()
       .setName('autoclear')
       .setDescription('Start auto-clearing messages in this channel'),
-    
     new SlashCommandBuilder()
       .setName('autoclearoff')
       .setDescription('Stop auto-clearing messages in this channel'),
-    
     new SlashCommandBuilder()
       .setName('lock')
       .setDescription('Lock the channel so only staff can write'),
-    
     new SlashCommandBuilder()
       .setName('unlock')
       .setDescription('Unlock the channel'),
-    
     new SlashCommandBuilder()
-      .setName('booster')
-      .setDescription('Ping all boosters'),
-    
+      .setName('boosterlist')
+      .setDescription('Booster Listenverwaltung')
+      .addSubcommand(sc =>
+        sc.setName('create')
+          .setDescription('Erstellt eine neue Boosterliste'))
+      .addSubcommand(sc =>
+        sc.setName('update')
+          .setDescription('Aktualisiert eine bestehende Boosterliste')
+          .addStringOption(o =>
+            o.setName('message')
+              .setDescription('Link oder ID der bestehenden Boosterliste')
+              .setRequired(false)))
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -407,9 +353,6 @@ client.once('ready', async () => {
   } catch {}
 });
 
-// ==========================================
-// MEMBER JOIN/LEAVE EVENTS
-// ==========================================
 client.on('guildMemberAdd', async (m) => {
   scheduleMemberCountUpdate();
   if (setupConfig.welcome) {
@@ -420,52 +363,33 @@ client.on('guildMemberAdd', async (m) => {
   }
 });
 
-client.on('guildMemberRemove', async (m) => {
+client.on('guildMemberRemove', async () => {
   scheduleMemberCountUpdate();
 });
 
-// ==========================================
-// MESSAGE MODERATION SYSTEM
-// ==========================================
 client.on('messageCreate', async (m) => {
   const bypass = checkBypass(m);
   const now = Date.now();
   const content = m.content || '';
-  
-  // DUPLICATE MESSAGE DETECTION - aber nicht für Webhooks (Commands)
   if (!bypass && !m.webhookId) {
     const userKey = `${m.channel.id}::${m.author.id}`;
-    
     if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
-    // Cleanup: keep last 2 minutes
     const history = messageHistory.get(userKey).filter(h => now - h.timestamp < 120000);
-    
-    // Check if exact same message was sent in last 20 seconds (stricter for regular messages)
     const recentDuplicate = history.some(h => h.content === content && now - h.timestamp < 20000);
-    
     if (recentDuplicate) {
       await m.delete().catch(() => {});
       return;
     }
-    
-    // Add to history only if not duplicate and not bypass
     history.push({ content, timestamp: now, messageId: m.id });
     messageHistory.set(userKey, history);
   }
-
-  // AUTOCLEAR SYSTEM
   if (autoClearChannels.has(m.channelId) && !bypass) {
     await m.delete().catch(() => {});
     return;
   }
-
-    try {
+  try {
     const contentLower = content.toLowerCase();
-
-    // IGNORE NON-WEBHOOK BOTS
     if (m.author.bot && !m.webhookId) return;
-
-    // If message contains the substring 'key' (case-insensitive), DM the user
     try {
       if (contentLower.includes('key')) {
         await m.author.send(
@@ -474,23 +398,18 @@ client.on('messageCreate', async (m) => {
         ).catch(() => {});
       }
     } catch {}
-
-    // USER MESSAGE MODERATION
     if (!m.webhookId) {
       if (!bypass) {
-        // MARKDOWN HEADER PROTECTION
         if (content.match(/^#{1,6}\s/)) {
           await m.delete().catch(() => {});
           return;
         }
-
-        // SPAM DETECTION
         if (!userSpamTracker.has(m.author.id)) userSpamTracker.set(m.author.id, []);
         const spamHistory = userSpamTracker.get(m.author.id).filter(t => now - t < 3000);
         spamHistory.push(now);
         userSpamTracker.set(m.author.id, spamHistory);
-        
         if (spamHistory.length >= 5) {
+          const userKey = `${m.channel.id}::${m.author.id}`;
           const h = messageHistory.get(userKey) || [];
           await bulkDelete(m.channel, h.slice(-5).map(x => x.messageId));
           if (m.member?.moderatable) {
@@ -501,8 +420,6 @@ client.on('messageCreate', async (m) => {
           userSpamTracker.delete(m.author.id);
           return;
         }
-
-        // MENTION SPAM PROTECTION
         const mentionCount = (content.match(/<@!?\d+>/g) || []).length + 
                             (content.match(/<@&\d+>/g) || []).length;
         if (mentionCount > 5) {
@@ -514,82 +431,12 @@ client.on('messageCreate', async (m) => {
           }
           return;
         }
-
-        // DISCORD INVITE LINK PROTECTION - DISABLED
-        /*
-        const hasLinkRole = m.member?.roles.cache.has(IDS.bypass) || 
-               m.member?.roles.cache.has(IDS.linkAllowed2) ||
-               m.member?.roles.cache.has(IDS.linkAllowedImages);
-        const hasAnti = m.member?.roles.cache.has(IDS.antiBypass);
-        const discordInviteRegex = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-zA-Z0-9]+/gi;
-        
-        if (!(hasLinkRole && !hasAnti) && discordInviteRegex.test(content)) {
-          await m.delete().catch(() => {});
-          if (m.member?.moderatable) {
-            try {
-              await m.member.timeout(TIMEOUTS.linkBlock, 'Discord invite link');
-              await m.author.send({
-                embeds: [new EmbedBuilder()
-                  .setTitle('⛔ You have been timed out')
-                  .setDescription('You have been timed out for **5 minutes** because you sent a Discord invite link.')
-                  .addFields({ name: 'Your message', value: `\`\`\`${content.substring(0, 1000)}\`\`\`` })
-                  .setColor('#ff0000')
-                  .setTimestamp()]
-              }).catch(() => {});
-            } catch {}
-          }
-          return;
-        }
-        */
-
-        // PHISHING LINK DETECTION - DISABLED
-        /*
-        const urls = content.match(/https?:\/\/[^\s]+/gi) || [];
-        for (const url of urls) {
-          if (PHISHING_DOMAINS.some(d => url.toLowerCase().includes(d))) {
-            await m.delete().catch(() => {});
-            if (m.member?.moderatable) {
-              try {
-                await m.member.timeout(TIMEOUTS.linkBlock, 'Phishing link detected');
-              } catch {}
-            }
-            await sendLog(new EmbedBuilder()
-              .setTitle('🚨 Phishing Link Detected')
-              .addFields(
-                { name: 'User', value: `${m.author.tag} (${m.author.id})`, inline: true },
-                { name: 'Channel', value: `${m.channel}`, inline: true },
-                { name: 'URL', value: url.substring(0, 1024) }
-              )
-              .setColor('#ff0000')
-              .setTimestamp());
-            return;
-          }
-        }
-        */
-
-// BLACKLIST WORD FILTER - DISABLED
-        /*
-        if (checkMsg(m)) {
-          await m.delete().catch(() => {});
-          if (m.member?.moderatable) {
-            try {
-              await m.member.timeout(TIMEOUTS.blacklist, 'Blacklisted word');
-            } catch {}
-          }
-          return;
-        }
-        */
       }
       return;
     }
-
-    // Webhooks sind erlaubt - keine Filterung
   } catch {}
 });
 
-// ==========================================
-// WEBHOOK UPDATE EVENT
-// ==========================================
 client.on('webhookUpdate', async (c) => {
   try {
     const whs = await c.fetchWebhooks();
@@ -599,12 +446,29 @@ client.on('webhookUpdate', async (c) => {
   } catch {}
 });
 
-// ==========================================
-// SLASH COMMANDS & INTERACTIONS
-// ==========================================
+const parseMessageLinkOrId = async (guild, currentChannel, input) => {
+  if (!input) return null;
+  const idMatch = input.match(/\d{17,20}$/);
+  if (!idMatch) return null;
+  const messageId = idMatch[0];
+  try {
+    const msg = await currentChannel.messages.fetch(messageId).catch(() => null);
+    if (msg) return msg;
+  } catch {}
+  try {
+    const channels = guild.channels.cache.filter(c => c.isTextBased());
+    for (const [, ch] of channels) {
+      try {
+        const m = await ch.messages.fetch(messageId).catch(() => null);
+        if (m) return m;
+      } catch {}
+    }
+  } catch {}
+  return null;
+};
+
 client.on('interactionCreate', async (i) => {
   try {
-    // SLASH COMMAND: MUTE
     if (i.isChatInputCommand() && i.commandName === 'mute') {
       if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
@@ -612,20 +476,15 @@ client.on('interactionCreate', async (i) => {
       const user = i.options.getUser('user');
       const duration = i.options.getString('duration');
       const ms = parseDuration(duration);
-      
       if (!ms || ms > 2419200000) {
         return i.reply({ content: 'Invalid duration (max 28d)', ephemeral: true });
       }
-      
       const member = await i.guild.members.fetch(user.id);
       if (!member.moderatable) {
         return i.reply({ content: 'Cannot timeout this user', ephemeral: true });
       }
-      
       await member.timeout(ms, `Timed out by ${i.user.tag}`);
       await i.reply({ content: `Timed out ${user.tag} for ${duration} and deleting messages...`, ephemeral: true });
-
-      // Search and delete messages in all channels
       i.guild.channels.cache.forEach(async (channel) => {
         if (channel.isTextBased() && channel.permissionsFor(i.guild.members.me).has(PermissionFlagsBits.ManageMessages)) {
           try {
@@ -634,10 +493,9 @@ client.on('interactionCreate', async (i) => {
             if (userMessages.size > 0) {
               await channel.bulkDelete(userMessages, true).catch(() => {});
             }
-          } catch (err) {}
+          } catch {}
         }
       });
-
       await sendLog(new EmbedBuilder()
         .setTitle('⏱️ User Timed Out')
         .addFields(
@@ -647,20 +505,15 @@ client.on('interactionCreate', async (i) => {
         )
         .setColor('#ffa500')
         .setTimestamp());
-    }
-
-    // SLASH COMMAND: UNMUTE
-    else if (i.isChatInputCommand() && i.commandName === 'unmute') {
+    } else if (i.isChatInputCommand() && i.commandName === 'unmute') {
       if (!i.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
       const user = i.options.getUser('user');
       const member = await i.guild.members.fetch(user.id);
-      
       if (!member.moderatable) {
         return i.reply({ content: 'Cannot unmute this user', ephemeral: true });
       }
-      
       await member.timeout(null, `Unmuted by ${i.user.tag}`);
       await i.reply({ content: `Unmuted ${user.tag}`, ephemeral: true });
       await sendLog(new EmbedBuilder()
@@ -671,19 +524,13 @@ client.on('interactionCreate', async (i) => {
         )
         .setColor('#00ff00')
         .setTimestamp());
-    }
-
-    // SLASH COMMAND: SETUP
-    else if (i.isChatInputCommand() && i.commandName === 'setup') {
+    } else if (i.isChatInputCommand() && i.commandName === 'setup') {
       if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
-      
       await i.deferReply({ ephemeral: true });
-      
       const feature = i.options.getString('feature');
       const channel = i.options.getChannel('channel');
-      
       if (feature === 'tickets') {
         const cat = await ensureTicketInfra(i.guild, channel);
         if (cat) {
@@ -711,20 +558,14 @@ client.on('interactionCreate', async (i) => {
           });
         }
       }
-      
       setupConfig[feature] = channel.id;
       writeSetup(setupConfig);
       await i.editReply({ content: `Setup complete: ${feature} → ${channel}` });
-    }
-
-    // SLASH COMMAND: RESETUP
-    else if (i.isChatInputCommand() && i.commandName === 'resetup') {
+    } else if (i.isChatInputCommand() && i.commandName === 'resetup') {
       if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
-      
       const feature = i.options.getString('feature');
-      
       if (setupConfig[feature]) {
         if (feature === 'tickets') {
           if (setupConfig.ticketCategory) {
@@ -750,37 +591,27 @@ client.on('interactionCreate', async (i) => {
       } else {
         await i.reply({ content: `No setup found: ${feature}`, ephemeral: true });
       }
-    }
-
-    // SLASH COMMAND: CLEAR
-    else if (i.isChatInputCommand() && i.commandName === 'clear') {
+    } else if (i.isChatInputCommand() && i.commandName === 'clear') {
       if (!i.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
-      
       const amount = i.options.getInteger('amount');
       const targetUser = i.options.getUser('user');
       const fetched = await i.channel.messages.fetch({ limit: amount });
       let toDelete = fetched;
-      
       if (targetUser) {
         const arr = fetched.filter(m => m.author.id === targetUser.id).first(amount);
         if (arr) toDelete = fetched.filter(m => arr.map(a => a.id).includes(m.id));
       }
-      
       if (!toDelete?.size) {
         return i.reply({ content: 'No messages found', ephemeral: true });
       }
-      
       const deleted = await i.channel.bulkDelete(toDelete, true);
       await i.reply({ 
         content: `Deleted ${deleted.size} message(s)${targetUser ? ` from ${targetUser.tag}` : ''}.`, 
         ephemeral: true 
       });
-    }
-
-    // SLASH COMMAND: AUTOCLEAR
-    else if (i.isChatInputCommand() && i.commandName === 'autoclear') {
+    } else if (i.isChatInputCommand() && i.commandName === 'autoclear') {
       if (!i.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
@@ -790,10 +621,7 @@ client.on('interactionCreate', async (i) => {
           'AutoClear is already active', 
         ephemeral: true 
       });
-    }
-
-    // SLASH COMMAND: AUTOCLEAROFF
-    else if (i.isChatInputCommand() && i.commandName === 'autoclearoff') {
+    } else if (i.isChatInputCommand() && i.commandName === 'autoclearoff') {
       if (!i.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
@@ -803,24 +631,18 @@ client.on('interactionCreate', async (i) => {
           'AutoClear is not active', 
         ephemeral: true 
       });
-    }
-
-    // SLASH COMMAND: LOCK
-    else if (i.isChatInputCommand() && i.commandName === 'lock') {
+    } else if (i.isChatInputCommand() && i.commandName === 'lock') {
       if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
-      
       try {
         const channel = i.channel;
         await channel.permissionOverwrites.edit(i.guild.id, {
           SendMessages: false
         });
-        
         await channel.permissionOverwrites.edit(IDS.staff, {
           SendMessages: true
         });
-        
         await i.reply({ content: '🔒 Channel locked! Only staff can write.', ephemeral: true });
         await sendLog(new EmbedBuilder()
           .setTitle('🔒 Channel Locked')
@@ -830,23 +652,18 @@ client.on('interactionCreate', async (i) => {
           )
           .setColor('#ffa500')
           .setTimestamp());
-      } catch (error) {
+      } catch {
         await i.reply({ content: 'Failed to lock channel', ephemeral: true });
       }
-    }
-
-    // SLASH COMMAND: UNLOCK
-    else if (i.isChatInputCommand() && i.commandName === 'unlock') {
+    } else if (i.isChatInputCommand() && i.commandName === 'unlock') {
       if (!i.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
         return i.reply({ content: 'No permissions', ephemeral: true });
       }
-      
       try {
         const channel = i.channel;
         await channel.permissionOverwrites.edit(i.guild.id, {
           SendMessages: null
         });
-        
         await i.reply({ content: '🔓 Channel unlocked! Everyone can write again.', ephemeral: true });
         await sendLog(new EmbedBuilder()
           .setTitle('🔓 Channel Unlocked')
@@ -856,47 +673,86 @@ client.on('interactionCreate', async (i) => {
           )
           .setColor('#00ff00')
           .setTimestamp());
-      } catch (error) {
+      } catch {
         await i.reply({ content: 'Failed to unlock channel', ephemeral: true });
       }
-    }
-
-    // SLASH COMMAND: BOOSTER
-    else if (i.isChatInputCommand() && i.commandName === 'booster') {
-      const requiredRole = '1453892506801541201';
-      const targetRole = '1464781880288350310';
-
+    } else if (i.isChatInputCommand() && i.commandName === 'boosterlist') {
+      const requiredRole = IDS.bypass;
+      const targetRoleId = '1464781880288350310';
       if (!i.member.roles.cache.has(requiredRole)) {
         return i.reply({ content: 'Keine Berechtigung.', ephemeral: true });
       }
-
-      const roleToPing = i.guild.roles.cache.get(targetRole);
+      const sub = i.options.getSubcommand();
+      const roleToPing = i.guild.roles.cache.get(targetRoleId);
       if (!roleToPing) {
         return i.reply({ content: 'Booster Rolle nicht gefunden.', ephemeral: true });
       }
-
-      const membersToPing = "## **Booster List**\n" + roleToPing.members.map(m => `- <@${m.id}>`).join('\n');
-      
-      if (!membersToPing || roleToPing.members.size === 0) {
-        return i.reply({ content: 'Keine User mit dieser Rolle gefunden.', ephemeral: true });
-      }
-
-      // Falls die Nachricht zu lang ist (Discord Limit 2000 Zeichen)
-      if (membersToPing.length > 2000) {
-        const chunks = membersToPing.match(/[\s\S]{1,2000}/g) || [];
-        await i.reply({ content: chunks[0] });
-        for (let j = 1; j < chunks.length; j++) {
-          await i.channel.send({ content: chunks[j] });
+      if (sub === 'create') {
+        if (roleToPing.members.size === 0) {
+          return i.reply({ content: 'Keine User mit dieser Rolle gefunden.', ephemeral: true });
         }
-      } else {
-        await i.reply({ content: membersToPing });
+        const content = roleToPing.members.map(m => `<@${m.id}>`).join('\n');
+        if (!content.length) {
+          return i.reply({ content: 'Keine User mit dieser Rolle gefunden.', ephemeral: true });
+        }
+        if (content.length > 2000) {
+          const chunks = content.match(/[\s\S]{1,2000}/g) || [];
+          const first = await i.reply({ content: chunks[0], fetchReply: true });
+          lastBoosterListMessage.set(i.guildId, first.id);
+          for (let j = 1; j < chunks.length; j++) {
+            await i.channel.send({ content: chunks[j] });
+          }
+        } else {
+          const msg = await i.reply({ content, fetchReply: true });
+          lastBoosterListMessage.set(i.guildId, msg.id);
+        }
+      } else if (sub === 'update') {
+        const input = i.options.getString('message');
+        if (!input) {
+          return i.reply({
+            content: 'Bitte zuerst die letzte Boosterliste, die ich erstellt habe, in den Chat senden (kopieren/bearbeiten) und dann **/boosterlist update message:<Nachrichtenlink oder ID>** benutzen.',
+            ephemeral: true
+          });
+        }
+        await i.deferReply({ ephemeral: true });
+        const msg = await parseMessageLinkOrId(i.guild, i.channel, input);
+        if (!msg) {
+          return i.editReply({ content: 'Nachricht nicht gefunden. Bitte Link oder ID prüfen.' });
+        }
+        const original = msg.content || '';
+        if (!original.trim().length) {
+          return i.editReply({ content: 'Die angegebene Nachricht hat keinen Inhalt.' });
+        }
+        const lines = original.split('\n');
+        const currentMemberIds = new Set(roleToPing.members.map(m => m.id));
+        const keptLines = [];
+        const mentionedIdsInLines = new Set();
+        for (const line of lines) {
+          const match = line.match(/<@!?(\d+)>/);
+          if (!match) {
+            keptLines.push(line);
+            continue;
+          }
+          const userId = match[1];
+          if (currentMemberIds.has(userId)) {
+            keptLines.push(line);
+            mentionedIdsInLines.add(userId);
+          }
+        }
+        const missingIds = [...currentMemberIds].filter(id => !mentionedIdsInLines.has(id));
+        const newLines = keptLines.slice();
+        for (const id of missingIds) {
+          newLines.push(`<@${id}>`);
+        }
+        const newContent = newLines.join('\n');
+        if (newContent.length > 2000) {
+          return i.editReply({ content: 'Aktualisierte Liste ist länger als 2000 Zeichen. Bitte Liste manuell kürzen.' });
+        }
+        await msg.edit({ content: newContent }).catch(() => {});
+        lastBoosterListMessage.set(i.guildId, msg.id);
+        await i.editReply({ content: 'Boosterliste aktualisiert.' });
       }
-    }
-
-
-
-    // TICKET SELECT MENU
-    else if (i.isStringSelectMenu() && i.customId === 'ticket-select') {
+    } else if (i.isStringSelectMenu() && i.customId === 'ticket-select') {
       if (i.values[0] === 'none') {
         return i.reply({ content: 'Selection cleared.', ephemeral: true });
       }
@@ -927,10 +783,7 @@ client.on('interactionCreate', async (i) => {
               .setRequired(true)
           )
         ));
-    }
-
-    // TICKET CLOSE BUTTON
-    else if (i.isButton() && i.customId === 'close-ticket') {
+    } else if (i.isButton() && i.customId === 'close-ticket') {
       await i.showModal(new ModalBuilder()
         .setCustomId('close-ticket-modal')
         .setTitle('Close Ticket')
@@ -943,19 +796,14 @@ client.on('interactionCreate', async (i) => {
               .setRequired(true)
           )
         ));
-    }
-
-    // TICKET CREATE MODAL
-    else if (i.isModalSubmit() && i.customId === 'ticket-create-modal') {
+    } else if (i.isModalSubmit() && i.customId === 'ticket-create-modal') {
       const executor = i.fields.getTextInputValue('executor-input');
       const problem = i.fields.getTextInputValue('problem-input');
       await i.deferReply({ ephemeral: true });
-
       const cat = await ensureTicketInfra(i.guild, i.channel);
       if (!cat) {
         return i.editReply({ content: '❌ Ticket category could not be created.' });
       }
-
       const ticketChannel = await i.guild.channels.create({
         name: `support-${i.user.username.replace(/[^a-zA-Z0-9]/g, '')}`,
         type: ChannelType.GuildText,
@@ -966,9 +814,7 @@ client.on('interactionCreate', async (i) => {
           { id: IDS.staff, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
         ]
       });
-
       activeTickets.set(i.user.id, ticketChannel.id);
-
       const msg = await ticketChannel.send({
         content: `${i.user}`,
         embeds: [new EmbedBuilder()
@@ -987,7 +833,6 @@ client.on('interactionCreate', async (i) => {
             .setStyle(ButtonStyle.Danger)
         )]
       });
-
       await msg.pin().catch(() => {});
       await i.editReply({ content: `✅ Ticket created: ${ticketChannel}` });
       await sendLog(new EmbedBuilder()
@@ -999,23 +844,16 @@ client.on('interactionCreate', async (i) => {
         )
         .setColor('#5865F2')
         .setTimestamp());
-    }
-
-    // TICKET CLOSE MODAL
-    else if (i.isModalSubmit() && i.customId === 'close-ticket-modal') {
+    } else if (i.isModalSubmit() && i.customId === 'close-ticket-modal') {
       const reason = i.fields.getTextInputValue('close-reason');
       const channel = i.channel;
       const ticketUser = Array.from(activeTickets.entries()).find(([, channelId]) => channelId === channel.id);
-      
       if (!ticketUser) {
         return i.reply({ content: 'Ticket user not found', ephemeral: true });
       }
-      
       const [userId] = ticketUser;
       activeTickets.delete(userId);
-
       await i.reply({ content: '✅ Closing ticket...', ephemeral: true });
-
       const user = await client.users.fetch(userId).catch(() => null);
       if (user) {
         user.send({
@@ -1027,7 +865,6 @@ client.on('interactionCreate', async (i) => {
             .setTimestamp()]
         }).catch(() => {});
       }
-
       if (setupConfig.ticketLogs) {
         const logs = await client.channels.fetch(setupConfig.ticketLogs).catch(() => null);
         if (logs) {
@@ -1044,7 +881,6 @@ client.on('interactionCreate', async (i) => {
           }).catch(() => {});
         }
       }
-
       await sendLog(new EmbedBuilder()
         .setTitle('🎫 Ticket Closed')
         .addFields(
@@ -1055,7 +891,6 @@ client.on('interactionCreate', async (i) => {
         )
         .setColor('#ff0000')
         .setTimestamp());
-      
       setTimeout(async () => {
         try {
           await channel.delete();
@@ -1065,9 +900,6 @@ client.on('interactionCreate', async (i) => {
   } catch {}
 });
 
-// ==========================================
-// EXPRESS API - STATUS ENDPOINT
-// ==========================================
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
@@ -1076,8 +908,5 @@ app.get('/', (req, res) => {
   });
 });
 
-// ==========================================
-// SERVER & CLIENT STARTUP
-// ==========================================
 app.listen(config.port || 3000, () => console.log('Server running'));
 client.login(config.token);
