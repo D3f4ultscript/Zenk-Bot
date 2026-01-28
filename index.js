@@ -1,12 +1,12 @@
 // ==========================================
 // DEPENDENCIES & CLIENT SETUP
 // ==========================================
+require('dotenv').config();
 const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes, ChannelType, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const config = require('./config');
-require('dotenv').config();
 
 // Create a simple HTTP server to satisfy Render's port check
 http.createServer((req, res) => {
@@ -325,8 +325,12 @@ client.once('ready', async () => {
 
   const rest = new REST({ version: '10' }).setToken(config.token);
   try {
+    console.log('Started refreshing application (/) commands.');
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-  } catch {}
+    console.log('Successfully reloaded application (/) commands.');
+  } catch (error) {
+    console.error('Error refreshing application (/) commands:', error);
+  }
 });
 
 // ==========================================
@@ -806,4 +810,7 @@ client.on('interactionCreate', async (i) => {
 // ==========================================
 // CLIENT STARTUP
 // ==========================================
-client.login(config.token);
+console.log('Logging in...');
+client.login(config.token).catch(err => {
+  console.error('Failed to login:', err);
+});
