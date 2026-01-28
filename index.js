@@ -4,8 +4,15 @@
 const { Client, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes, ChannelType, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const config = require('./config');
 require('dotenv').config();
+
+// Create a simple HTTP server to satisfy Render's port check
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot is running!');
+}).listen(process.env.PORT || 3000);
 
 const client = new Client({ 
   intents: [
