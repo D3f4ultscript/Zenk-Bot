@@ -8,6 +8,19 @@ const path = require('path');
 const http = require('http');
 const config = require('./config');
 
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+});
+
+if (!config.token) {
+  console.error('Missing DISCORD_TOKEN. Set it in Render Environment or .env locally.');
+  process.exit(1);
+}
+
 // Create a simple HTTP server to satisfy Render's port check
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -351,10 +364,10 @@ client.on('messageCreate', async (m) => {
   const bypass = checkBypass(m);
   const now = Date.now();
   const content = m.content || '';
+  const userKey = (!bypass && !m.webhookId) ? `${m.channel.id}::${m.author.id}` : null;
   
   // DUPLICATE MESSAGE DETECTION - aber nicht für Webhooks (Commands)
   if (!bypass && !m.webhookId) {
-    const userKey = `${m.channel.id}::${m.author.id}`;
     
     if (!messageHistory.has(userKey)) messageHistory.set(userKey, []);
     // Cleanup: keep last 2 minutes
